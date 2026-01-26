@@ -64,6 +64,7 @@ describe('AppServerEventConverter', () => {
         expect(completed).toEqual([{
             type: 'exec_command_end',
             call_id: 'cmd-1',
+            command: 'ls',
             output: 'ok',
             exit_code: 0
         }]);
