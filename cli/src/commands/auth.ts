@@ -3,6 +3,7 @@ import os from 'node:os'
 import * as readline from 'node:readline/promises'
 import { stdin as input, stdout as output } from 'node:process'
 import { configuration } from '@/configuration'
+import { initializeApiUrl } from '@/ui/apiUrlInit'
 import { readSettings, clearMachineId, updateSettings } from '@/persistence'
 import type { CommandDefinition } from './types'
 
@@ -15,6 +16,7 @@ export async function handleAuthCommand(args: string[]): Promise<void> {
     }
 
     if (subcommand === 'status') {
+        await initializeApiUrl()
         const settings = await readSettings()
         const envToken = process.env.CLI_API_TOKEN
         const settingsToken = settings.cliApiToken

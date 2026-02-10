@@ -67,6 +67,13 @@ bun run dev             # hub + web concurrently
 bun run build:single-exe # All-in-one binary
 ```
 
+## Local deployment notes
+- systemd unit: `/etc/systemd/system/hapi-server.service`
+- env file: `/etc/hapi-server/hapi-server.env` (e.g. `CLI_API_TOKEN=...`)
+- entrypoint: `/root/projects/hapi/hub/dist/index.js` (systemd `ExecStart`)
+- server data dir: `/var/lib/hapi` (via `HAPI_HOME=/var/lib/hapi`; reads `/var/lib/hapi/settings.json`)
+- reload/restart: `systemctl daemon-reload && systemctl restart hapi-server`
+
 ## Key source dirs
 
 ### CLI (`cli/src/`)
