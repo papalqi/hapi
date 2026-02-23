@@ -21,6 +21,14 @@ type PushPayload = {
     }
 }
 
+self.addEventListener('install', () => {
+    void self.skipWaiting()
+})
+
+self.addEventListener('activate', (event) => {
+    event.waitUntil(self.clients.claim())
+})
+
 precacheAndRoute(self.__WB_MANIFEST)
 
 registerRoute(

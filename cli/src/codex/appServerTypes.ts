@@ -94,7 +94,7 @@ export type SandboxPolicy =
         excludeSlashTmp?: boolean;
     };
 
-export type ReasoningEffort = 'low' | 'medium' | 'high' | 'auto';
+export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'auto';
 export type ReasoningSummary = 'auto' | 'none' | 'brief' | 'detailed';
 
 export type CollaborationMode = {

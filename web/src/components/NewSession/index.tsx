@@ -13,6 +13,7 @@ import { AgentSelector } from './AgentSelector'
 import { DirectorySection } from './DirectorySection'
 import { MachineSelector } from './MachineSelector'
 import { ModelSelector } from './ModelSelector'
+import { ReasoningEffortSelector } from './ReasoningEffortSelector'
 import { SessionTypeSelector } from './SessionTypeSelector'
 import { YoloToggle } from './YoloToggle'
 
@@ -36,6 +37,7 @@ export function NewSession(props: {
     const [pathExistence, setPathExistence] = useState<Record<string, boolean>>({})
     const [agent, setAgent] = useState<AgentType>('claude')
     const [model, setModel] = useState('auto')
+    const [reasoningEffort, setReasoningEffort] = useState('auto')
     const [yoloMode, setYoloMode] = useState(false)
     const [sessionType, setSessionType] = useState<SessionType>('simple')
     const [worktreeName, setWorktreeName] = useState('')
@@ -50,6 +52,10 @@ export function NewSession(props: {
 
     useEffect(() => {
         setModel('auto')
+    }, [agent])
+
+    useEffect(() => {
+        setReasoningEffort('auto')
     }, [agent])
 
     useEffect(() => {
@@ -196,11 +202,15 @@ export function NewSession(props: {
         setError(null)
         try {
             const resolvedModel = model !== 'auto' && agent !== 'opencode' ? model : undefined
+            const resolvedReasoningEffort = agent === 'codex' && reasoningEffort !== 'auto'
+                ? reasoningEffort
+                : undefined
             const result = await spawnSession({
                 machineId,
                 directory: directory.trim(),
                 agent,
                 model: resolvedModel,
+                reasoningEffort: resolvedReasoningEffort,
                 yolo: yoloMode,
                 sessionType,
                 worktreeName: sessionType === 'worktree' ? (worktreeName.trim() || undefined) : undefined
@@ -264,6 +274,12 @@ export function NewSession(props: {
                 model={model}
                 isDisabled={isFormDisabled}
                 onModelChange={setModel}
+            />
+            <ReasoningEffortSelector
+                agent={agent}
+                value={reasoningEffort}
+                isDisabled={isFormDisabled}
+                onChange={setReasoningEffort}
             />
             <YoloToggle
                 yoloMode={yoloMode}

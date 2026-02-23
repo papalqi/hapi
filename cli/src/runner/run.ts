@@ -179,6 +179,7 @@ export async function startRunner(): Promise<void> {
 
       const { directory, sessionId, machineId, approvedNewDirectoryCreation = true } = options;
       const agent = options.agent ?? 'claude';
+      const reasoningEffort = options.reasoningEffort;
       const yolo = options.yolo === true;
       const sessionType = options.sessionType ?? 'simple';
       const worktreeName = options.worktreeName;
@@ -341,6 +342,9 @@ export async function startRunner(): Promise<void> {
         args.push('--hapi-starting-mode', 'remote', '--started-by', 'runner');
         if (options.model && agent !== 'opencode') {
           args.push('--model', options.model);
+        }
+        if (agent === 'codex' && reasoningEffort) {
+          args.push('--reasoning-effort', reasoningEffort);
         }
         if (yolo) {
           args.push('--yolo');

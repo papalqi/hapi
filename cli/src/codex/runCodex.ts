@@ -20,6 +20,7 @@ export async function runCodex(opts: {
     permissionMode?: PermissionMode;
     resumeSessionId?: string;
     model?: string;
+    reasoningEffort?: import('./appServerTypes').ReasoningEffort;
 }): Promise<void> {
     const workingDirectory = process.cwd();
     const startedBy = opts.startedBy ?? 'terminal';
@@ -43,6 +44,7 @@ export async function runCodex(opts: {
     const messageQueue = new MessageQueue2<EnhancedMode>((mode) => hashObject({
         permissionMode: mode.permissionMode,
         model: mode.model,
+        reasoningEffort: mode.reasoningEffort,
         collaborationMode: mode.collaborationMode
     }));
 
@@ -51,6 +53,7 @@ export async function runCodex(opts: {
 
     let currentPermissionMode: PermissionMode = opts.permissionMode ?? 'default';
     const currentModel = opts.model;
+    const currentReasoningEffort = opts.reasoningEffort;
     let currentCollaborationMode: EnhancedMode['collaborationMode'];
 
     const lifecycle = createRunnerLifecycle({
@@ -78,6 +81,7 @@ export async function runCodex(opts: {
         const enhancedMode: EnhancedMode = {
             permissionMode: messagePermissionMode ?? 'default',
             model: currentModel,
+            reasoningEffort: currentReasoningEffort,
             collaborationMode: currentCollaborationMode
         };
         const formattedText = formatMessageWithAttachments(message.content.text, message.content.attachments);
