@@ -5,7 +5,20 @@ const path = require('path');
 
 const platform = process.platform;
 const arch = process.arch;
-const pkgName = `@twsxtd/hapi-${platform}-${arch}`;
+
+function resolvePlatformPackageName() {
+    try {
+        const mainPkg = require('../package.json');
+        if (mainPkg && typeof mainPkg.name === 'string' && mainPkg.name.length > 0) {
+            return `${mainPkg.name}-${platform}-${arch}`;
+        }
+    } catch (e) {
+        // ignore
+    }
+    return `@twsxtd/hapi-${platform}-${arch}`;
+}
+
+const pkgName = resolvePlatformPackageName();
 
 function getBinaryPath() {
     try {
