@@ -55,7 +55,7 @@ export function buildSessionMetadata(options: {
     const worktreeInfo = readWorktreeEnv()
     const now = options.now ?? Date.now()
 
-    return {
+    const metadata: Metadata = {
         path: options.workingDirectory,
         host: os.hostname(),
         version: packageJson.version,
@@ -73,6 +73,13 @@ export function buildSessionMetadata(options: {
         flavor: options.flavor,
         worktree: worktreeInfo ?? undefined
     }
+
+    // 如果有 worktree 信息，设置会话名称为 worktree 名称
+    if (worktreeInfo?.name) {
+        metadata.name = worktreeInfo.name
+    }
+
+    return metadata
 }
 
 async function getMachineIdOrExit(): Promise<string> {
