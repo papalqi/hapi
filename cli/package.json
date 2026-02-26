@@ -1,15 +1,15 @@
 {
-  "name": "@twsxtd/hapi",
+  "name": "@papalqi/hapi",
   "version": "0.15.1",
   "description": "App for agentic coding - access coding agent anywhere",
-  "author": "Kirill Dubovitskiy & weishu",
+  "author": "papalqi",
   "license": "AGPL-3.0-only",
   "type": "module",
-  "homepage": "https://github.com/tiann/hapi",
-  "bugs": "https://github.com/tiann/hapi/issues",
+  "homepage": "https://github.com/papalqi/hapi",
+  "bugs": "https://github.com/papalqi/hapi/issues",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/tiann/hapi.git",
+    "url": "git+https://github.com/papalqi/hapi.git",
     "directory": "cli"
   },
   "bin": {
@@ -26,11 +26,11 @@
     }
   },
   "optionalDependencies": {
-    "@twsxtd/hapi-darwin-arm64": "0.15.1",
-    "@twsxtd/hapi-darwin-x64": "0.15.1",
-    "@twsxtd/hapi-linux-arm64": "0.15.1",
-    "@twsxtd/hapi-linux-x64": "0.15.1",
-    "@twsxtd/hapi-win32-x64": "0.15.1"
+    "@papalqi/hapi-darwin-arm64": "0.15.1",
+    "@papalqi/hapi-darwin-x64": "0.15.1",
+    "@papalqi/hapi-linux-arm64": "0.15.1",
+    "@papalqi/hapi-linux-x64": "0.15.1",
+    "@papalqi/hapi-win32-x64": "0.15.1"
   },
   "scripts": {
     "postinstall": "node -e \"try{require('fs').chmodSync(require('path').join(__dirname,'bin','hapi.cjs'),0o755)}catch(e){}\"",
