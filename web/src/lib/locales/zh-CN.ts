@@ -39,7 +39,7 @@ export default {
   'login.footer.copyright': '©',
 
   // Sessions page
-  'sessions.count': '{n} 个会话，{m} 个项目',
+  'sessions.count': '{n} 个会话，{m} 台机器',
   'sessions.new': '新建会话',
 
   // Session list
@@ -124,6 +124,9 @@ export default {
 
   // Machine
   'machine.unknown': '未知平台',
+  'machine.rename': '重命名机器',
+  'machine.save': '保存',
+  'machine.cancel': '取消',
 
   // Chat
   'chat.placeholder': '输入消息…',

@@ -39,7 +39,7 @@ export default {
   'login.footer.copyright': '©',
 
   // Sessions page
-  'sessions.count': '{n} sessions in {m} projects',
+  'sessions.count': '{n} sessions across {m} machines',
   'sessions.new': 'New Session',
 
   // Session list
@@ -122,6 +122,9 @@ export default {
 
   // Machine
   'machine.unknown': 'Unknown platform',
+  'machine.rename': 'Rename machine',
+  'machine.save': 'Save',
+  'machine.cancel': 'Cancel',
 
   // Chat
   'chat.placeholder': 'Type a message…',
