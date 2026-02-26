@@ -38,7 +38,7 @@ export function NewSession(props: {
     const [agent, setAgent] = useState<AgentType>('claude')
     const [model, setModel] = useState('auto')
     const [reasoningEffort, setReasoningEffort] = useState('auto')
-    const [yoloMode, setYoloMode] = useState(false)
+    const [yoloMode, setYoloMode] = useState(true)
     const [sessionType, setSessionType] = useState<SessionType>('simple')
     const [worktreeName, setWorktreeName] = useState('')
     const [error, setError] = useState<string | null>(null)
