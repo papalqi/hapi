@@ -282,6 +282,22 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
                 const error = asString(msg.error);
                 messageBuffer.addMessage(error ? `Task failed: ${error}` : 'Task failed', 'status');
                 sendReady();
+            } else if (msgType === 'stream_error') {
+                const message = asString(msg.message) ?? 'Stream error';
+                messageBuffer.addMessage(`Error: ${message}`, 'status');
+                session.sendSessionEvent({ type: 'message', message: `Stream error: ${message}` });
+                // 网络错误后重置会话状态，允许重新连接
+                wasCreated = false;
+                currentModeHash = null;
+                logger.debug('[Codex] Reset session state after stream error');
+            } else if (msgType === 'error') {
+                const message = asString(msg.message) ?? 'Unknown error';
+                messageBuffer.addMessage(`Error: ${message}`, 'status');
+                session.sendSessionEvent({ type: 'message', message: `Codex error: ${message}` });
+                // API 错误后重置会话状态，允许重新连接
+                wasCreated = false;
+                currentModeHash = null;
+                logger.debug('[Codex] Reset session state after API error');
             }
 
             if (msgType === 'task_started') {
