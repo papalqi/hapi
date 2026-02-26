@@ -166,6 +166,18 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
             }
         };
 
+        const shouldForceSessionReset = (rawMessage: string): boolean => {
+            const message = rawMessage.toLowerCase();
+            return (
+                message.includes('no active session') ||
+                message.includes('session not found') ||
+                message.includes('conversation not found') ||
+                message.includes('invalid session') ||
+                message.includes('invalid conversation') ||
+                message.includes('thread not found')
+            );
+        };
+
         const permissionHandler = new CodexPermissionHandler(session.client, {
             onRequest: ({ id, toolName, input }) => {
                 const inputRecord = input && typeof input === 'object' ? input as Record<string, unknown> : {};
@@ -286,18 +298,26 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
                 const message = asString(msg.message) ?? 'Stream error';
                 messageBuffer.addMessage(`Error: ${message}`, 'status');
                 session.sendSessionEvent({ type: 'message', message: `Stream error: ${message}` });
-                // 网络错误后重置会话状态，允许重新连接
-                wasCreated = false;
-                currentModeHash = null;
-                logger.debug('[Codex] Reset session state after stream error');
+                if (shouldForceSessionReset(message)) {
+                    wasCreated = false;
+                    currentModeHash = null;
+                    mcpClient?.clearSession();
+                    logger.debug('[Codex] Forced session reset after stream error (session invalid)');
+                } else {
+                    logger.debug('[Codex] Keeping session state after stream error to preserve context');
+                }
             } else if (msgType === 'error') {
                 const message = asString(msg.message) ?? 'Unknown error';
                 messageBuffer.addMessage(`Error: ${message}`, 'status');
                 session.sendSessionEvent({ type: 'message', message: `Codex error: ${message}` });
-                // API 错误后重置会话状态，允许重新连接
-                wasCreated = false;
-                currentModeHash = null;
-                logger.debug('[Codex] Reset session state after API error');
+                if (shouldForceSessionReset(message)) {
+                    wasCreated = false;
+                    currentModeHash = null;
+                    mcpClient?.clearSession();
+                    logger.debug('[Codex] Forced session reset after API error (session invalid)');
+                } else {
+                    logger.debug('[Codex] Keeping session state after API error to preserve context');
+                }
             }
 
             if (msgType === 'task_started') {

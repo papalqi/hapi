@@ -5,6 +5,8 @@ import { clampAliveTime } from './aliveTime'
 import { EventPublisher } from './eventPublisher'
 import { extractTodoWriteTodosFromMessageContent, TodosSchema } from './todos'
 
+const SESSION_INACTIVE_TIMEOUT_MS = 60 * 60 * 1000
+
 export class SessionCache {
     private readonly sessions: Map<string, Session> = new Map()
     private readonly lastBroadcastAtBySessionId: Map<string, number> = new Map()
@@ -206,11 +208,9 @@ export class SessionCache {
     }
 
     expireInactive(now: number = Date.now()): void {
-        const sessionTimeoutMs = 30_000
-
         for (const session of this.sessions.values()) {
             if (!session.active) continue
-            if (now - session.activeAt <= sessionTimeoutMs) continue
+            if (now - session.activeAt <= SESSION_INACTIVE_TIMEOUT_MS) continue
             session.active = false
             session.thinking = false
             this.publisher.emit({ type: 'session-updated', sessionId: session.id, data: { active: false } })
