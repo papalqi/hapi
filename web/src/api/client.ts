@@ -356,6 +356,13 @@ export class ApiClient {
         return await this.request<MachinesResponse>('/api/machines')
     }
 
+    async renameMachine(machineId: string, displayName: string | null): Promise<void> {
+        await this.request(`/api/machines/${encodeURIComponent(machineId)}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ displayName })
+        })
+    }
+
     async checkMachinePathsExists(
         machineId: string,
         paths: string[]

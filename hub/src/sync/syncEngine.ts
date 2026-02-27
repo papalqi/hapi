@@ -218,6 +218,10 @@ export class SyncEngine {
         return this.machineCache.getOrCreateMachine(id, metadata, runnerState, namespace)
     }
 
+    async renameMachine(machineId: string, namespace: string, displayName: string | null): Promise<void> {
+        await this.machineCache.renameMachine(machineId, namespace, displayName)
+    }
+
     async sendMessage(
         sessionId: string,
         payload: {

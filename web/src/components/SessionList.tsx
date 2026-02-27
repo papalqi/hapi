@@ -40,11 +40,8 @@ function getGroupDisplayName(directory: string): string {
 function getMachineDisplayName(
     machineId: string,
     machines: Machine[],
-    machineNameOverrides: Map<string, string>,
     t: (key: string) => string
 ): string {
-    const override = machineNameOverrides.get(machineId)
-    if (override) return override
     const machine = machines.find(m => m.id === machineId)
     if (machine?.metadata?.displayName) return machine.metadata.displayName
     if (machine?.metadata?.host) return machine.metadata.host
@@ -88,7 +85,7 @@ function groupSessionsByDirectory(sessions: SessionSummary[]): SessionGroup[] {
         })
 }
 
-function groupSessionsByMachine(sessions: SessionSummary[], machines: Machine[], machineNameOverrides: Map<string, string>, t: (key: string) => string): MachineGroup[] {
+function groupSessionsByMachine(sessions: SessionSummary[], machines: Machine[], t: (key: string) => string): MachineGroup[] {
     const machineMap = new Map<string, SessionSummary[]>()
 
     sessions.forEach(session => {
@@ -107,7 +104,7 @@ function groupSessionsByMachine(sessions: SessionSummary[], machines: Machine[],
                 -Infinity
             )
             const hasActiveSession = machineSessions.some(s => s.active)
-            const machineName = getMachineDisplayName(machineId, machines, machineNameOverrides, t)
+            const machineName = getMachineDisplayName(machineId, machines, t)
 
             return { machineId, machineName, directoryGroups, latestUpdatedAt, hasActiveSession }
         })
@@ -303,35 +300,6 @@ function formatRelativeTime(value: number, t: (key: string, params?: Record<stri
     return new Date(ms).toLocaleDateString()
 }
 
-// 从 localStorage 读取/保存机器名覆盖
-const MACHINE_NAMES_KEY = 'hapi-machine-name-overrides'
-
-function loadMachineNameOverrides(): Map<string, string> {
-    try {
-        const raw = localStorage.getItem(MACHINE_NAMES_KEY)
-        if (raw) {
-            const obj = JSON.parse(raw) as Record<string, string>
-            return new Map(Object.entries(obj))
-        }
-    } catch (error) {
-        if (import.meta.env.DEV) {
-            console.error('Failed to load machine name overrides:', error)
-        }
-    }
-    return new Map()
-}
-
-function saveMachineNameOverrides(overrides: Map<string, string>) {
-    try {
-        const obj = Object.fromEntries(overrides)
-        localStorage.setItem(MACHINE_NAMES_KEY, JSON.stringify(obj))
-    } catch (error) {
-        if (import.meta.env.DEV) {
-            console.error('Failed to save machine name overrides:', error)
-        }
-    }
-}
-
 // --- 会话条目组件 ---
 
 function SessionItem(props: {
@@ -491,6 +459,7 @@ function MachineNameEditor(props: {
     currentName: string
     onSave: (machineId: string, newName: string) => void
     onCancel: () => void
+    isSaving?: boolean
 }) {
     const { t } = useTranslation()
     const [value, setValue] = useState(props.currentName)
@@ -516,12 +485,14 @@ function MachineNameEditor(props: {
                 }}
                 className="bg-[var(--app-subtle-bg)] border border-[var(--app-divider)] rounded px-2 py-0.5 text-base font-semibold text-[var(--app-fg)] focus:outline-none focus:ring-1 focus:ring-[var(--app-link)]"
                 autoFocus
+                disabled={props.isSaving}
             />
             <button
                 type="button"
                 onClick={handleSave}
                 className="p-1 rounded hover:bg-[var(--app-subtle-bg)] text-[var(--app-badge-success-text)]"
                 title={t('machine.save')}
+                disabled={props.isSaving}
             >
                 <CheckIcon />
             </button>
@@ -530,6 +501,7 @@ function MachineNameEditor(props: {
                 onClick={props.onCancel}
                 className="p-1 rounded hover:bg-[var(--app-subtle-bg)] text-[var(--app-hint)]"
                 title={t('machine.cancel')}
+                disabled={props.isSaving}
             >
                 <CloseIcon />
             </button>
@@ -553,26 +525,31 @@ export function SessionList(props: {
     const { t } = useTranslation()
     const { renderHeader = true, api, selectedSessionId, machines = [] } = props
 
-    // 机器名覆盖（可编辑的机器名，存在 localStorage 中）
-    const [machineNameOverrides, setMachineNameOverrides] = useState<Map<string, string>>(
-        () => loadMachineNameOverrides()
-    )
     const [editingMachineId, setEditingMachineId] = useState<string | null>(null)
+    const [savingMachineId, setSavingMachineId] = useState<string | null>(null)
 
     const handleSaveMachineName = (machineId: string, newName: string) => {
-        setMachineNameOverrides(prev => {
-            const next = new Map(prev)
-            next.set(machineId, newName)
-            saveMachineNameOverrides(next)
-            return next
-        })
-        setEditingMachineId(null)
+        if (!api) {
+            setEditingMachineId(null)
+            return
+        }
+        setSavingMachineId(machineId)
+        void api.renameMachine(machineId, newName)
+            .catch((error) => {
+                if (import.meta.env.DEV) {
+                    console.error('Failed to rename machine:', error)
+                }
+            })
+            .finally(() => {
+                setSavingMachineId(null)
+                setEditingMachineId(null)
+            })
     }
 
     // 按机器分一级分组，再按目录分二级分组
     const machineGroups = useMemo(
-        () => groupSessionsByMachine(props.sessions, machines, machineNameOverrides, t),
-        [props.sessions, machines, machineNameOverrides, t]
+        () => groupSessionsByMachine(props.sessions, machines, t),
+        [props.sessions, machines, t]
     )
 
     // 折叠状态：分为机器级别和目录级别
@@ -674,6 +651,7 @@ export function SessionList(props: {
                                             currentName={machineGroup.machineName}
                                             onSave={handleSaveMachineName}
                                             onCancel={() => setEditingMachineId(null)}
+                                            isSaving={savingMachineId === machineGroup.machineId}
                                         />
                                     ) : (
                                         <>
@@ -688,6 +666,7 @@ export function SessionList(props: {
                                                 }}
                                                 className="p-0.5 rounded hover:bg-[var(--app-subtle-bg)] text-[var(--app-hint)] hover:text-[var(--app-fg)] opacity-100 transition-opacity"
                                                 title={t('machine.rename')}
+                                                disabled={!api}
                                             >
                                                 <EditIcon />
                                             </button>

@@ -18,6 +18,10 @@ const pathsExistsSchema = z.object({
     paths: z.array(z.string().min(1)).max(1000)
 })
 
+const renameMachineSchema = z.object({
+    displayName: z.string().max(255).nullable()
+})
+
 export function createMachinesRoutes(getSyncEngine: () => SyncEngine | null): Hono<WebAppEnv> {
     const app = new Hono<WebAppEnv>()
 
@@ -91,6 +95,47 @@ export function createMachinesRoutes(getSyncEngine: () => SyncEngine | null): Ho
             return c.json({ exists })
         } catch (error) {
             return c.json({ error: error instanceof Error ? error.message : 'Failed to check paths' }, 500)
+        }
+    })
+
+    app.patch('/machines/:id', async (c) => {
+        const engine = getSyncEngine()
+        if (!engine) {
+            return c.json({ error: 'Not connected' }, 503)
+        }
+
+        const machineId = c.req.param('id')
+        const machine = requireMachine(c, engine, machineId)
+        if (machine instanceof Response) {
+            return machine
+        }
+
+        const body = await c.req.json().catch(() => null)
+        const parsed = renameMachineSchema.safeParse(body)
+        if (!parsed.success) {
+            return c.json({ error: 'Invalid body: displayName is required' }, 400)
+        }
+
+        const normalizedDisplayName = (() => {
+            if (parsed.data.displayName === null) {
+                return null
+            }
+            const trimmed = parsed.data.displayName.trim()
+            return trimmed.length > 0 ? trimmed : null
+        })()
+
+        try {
+            await engine.renameMachine(machineId, machine.namespace, normalizedDisplayName)
+            return c.json({ ok: true })
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Failed to rename machine'
+            if (message.includes('concurrently') || message.includes('version')) {
+                return c.json({ error: message }, 409)
+            }
+            if (message.includes('not found')) {
+                return c.json({ error: message }, 404)
+            }
+            return c.json({ error: message }, 500)
         }
     })
 

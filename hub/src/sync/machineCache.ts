@@ -164,4 +164,49 @@ export class MachineCache {
             this.publisher.emit({ type: 'machine-updated', machineId: machine.id, data: { active: false } })
         }
     }
+
+    async renameMachine(machineId: string, namespace: string, displayName: string | null): Promise<void> {
+        let stored = this.store.machines.getMachineByNamespace(machineId, namespace)
+        if (!stored) {
+            throw new Error('Machine not found')
+        }
+
+        const applyDisplayName = (metadata: unknown): Record<string, unknown> => {
+            const next = metadata && typeof metadata === 'object'
+                ? { ...(metadata as Record<string, unknown>) }
+                : {}
+            if (displayName === null) {
+                delete next.displayName
+            } else {
+                next.displayName = displayName
+            }
+            return next
+        }
+
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+            const result = this.store.machines.updateMachineMetadata(
+                machineId,
+                applyDisplayName(stored.metadata),
+                stored.metadataVersion,
+                namespace
+            )
+
+            if (result.result === 'success') {
+                this.refreshMachine(machineId)
+                return
+            }
+
+            if (result.result === 'error') {
+                throw new Error('Failed to update machine metadata')
+            }
+
+            const latest = this.store.machines.getMachineByNamespace(machineId, namespace)
+            if (!latest) {
+                throw new Error('Machine not found')
+            }
+            stored = latest
+        }
+
+        throw new Error('Machine was modified concurrently. Please try again.')
+    }
 }
