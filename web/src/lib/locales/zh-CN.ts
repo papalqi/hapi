@@ -90,6 +90,7 @@ export default {
   'button.close': '关闭',
   'button.dismiss': '忽略',
   'button.copy': '复制',
+  'button.paste': '粘贴',
 
   // New session form
   'newSession.machine': '机器',
@@ -142,6 +143,9 @@ export default {
   'terminal.commandArgs': '命令参数',
   'terminal.stdout': '标准输出',
   'terminal.stderr': '标准错误',
+  'terminal.paste.fallbackTitle': '粘贴输入',
+  'terminal.paste.fallbackDescription': '无法读取剪贴板，请在下方粘贴文本。',
+  'terminal.paste.placeholder': '在此粘贴终端输入…',
 
   // Code block
   'code.copy': '复制',
@@ -227,6 +231,9 @@ export default {
   'syncing.title': '同步中…',
   'syncing.message': '正在同步您的数据。',
   'reconnecting.message': '正在重新连接...',
+  'reconnecting.reason.error': '流连接错误',
+  'reconnecting.reason.closed': '流连接已关闭',
+  'reconnecting.reason.heartbeatTimeout': '心跳超时',
 
   // Send blocked
   'send.blocked.title': '无法发送消息',

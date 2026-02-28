@@ -88,6 +88,7 @@ export default {
   'button.close': 'Close',
   'button.dismiss': 'Dismiss',
   'button.copy': 'Copy',
+  'button.paste': 'Paste',
 
   // New session form
   'newSession.machine': 'Machine',
@@ -140,6 +141,9 @@ export default {
   'terminal.commandArgs': 'Command args',
   'terminal.stdout': 'Stdout',
   'terminal.stderr': 'Stderr',
+  'terminal.paste.fallbackTitle': 'Paste input',
+  'terminal.paste.fallbackDescription': 'Clipboard read is unavailable. Paste your text below.',
+  'terminal.paste.placeholder': 'Paste terminal input here…',
 
   // Code block
   'code.copy': 'Copy',
@@ -225,6 +229,9 @@ export default {
   'syncing.title': 'Syncing…',
   'syncing.message': 'Your data is being synchronized.',
   'reconnecting.message': 'Reconnecting...',
+  'reconnecting.reason.error': 'stream error',
+  'reconnecting.reason.closed': 'stream closed',
+  'reconnecting.reason.heartbeatTimeout': 'heartbeat timeout',
 
   // Send blocked
   'send.blocked.title': 'Cannot send message',
