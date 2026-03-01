@@ -140,16 +140,23 @@ export class CodexSdkClient {
             return;
         }
 
-        const moduleName = '@openai/codex-sdk';
         let imported: unknown;
         try {
-            imported = await import(moduleName);
+            // Keep the specifier literal so Bun compile can bundle the SDK into the executable.
+            imported = await import('@openai/codex-sdk');
         } catch (error) {
-            throw new Error('Failed to load @openai/codex-sdk. Install it to enable SDK mode.', { cause: error });
+            const reason = error instanceof Error
+                ? `${error.name}: ${error.message}`
+                : String(error);
+            throw new Error(`Failed to load @openai/codex-sdk: ${reason}`, { cause: error });
         }
 
         const importedRecord = asRecord(imported);
-        const codexCtor = importedRecord?.Codex;
+        const importedDefault = asRecord(importedRecord?.default);
+        const codexCtor =
+            importedRecord?.Codex
+            ?? importedDefault?.Codex
+            ?? importedRecord?.default;
         if (typeof codexCtor !== 'function') {
             throw new Error('@openai/codex-sdk does not export Codex');
         }
