@@ -78,6 +78,7 @@ export function buildCodexSdkOptions(args: {
     mcpServers: McpServersConfig;
     developerInstructions?: string;
 }): {
+    codexPathOverride?: string;
     config: Record<string, unknown>;
 } {
     const developerInstructions = args.developerInstructions
@@ -85,6 +86,10 @@ export function buildCodexSdkOptions(args: {
         : codexSystemPrompt;
 
     return {
+        // On Windows, Codex SDK's default binary discovery relies on @openai/codex optional deps
+        // that may be unavailable in compiled single-file distributions.
+        // Point explicitly to the globally installed CLI shim instead.
+        ...(process.platform === 'win32' ? { codexPathOverride: 'codex.cmd' } : {}),
         config: {
             mcp_servers: args.mcpServers,
             developer_instructions: developerInstructions

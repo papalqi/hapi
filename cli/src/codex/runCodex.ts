@@ -96,6 +96,20 @@ export async function runCodex(opts: {
         return `${message.slice(0, maxLength)}...`;
     };
 
+    const describeError = (error: unknown): string => {
+        if (error instanceof Error) {
+            const stack = typeof error.stack === 'string' && error.stack.length > 0
+                ? `\n${error.stack}`
+                : '';
+            return `${error.name}: ${error.message}${stack}`;
+        }
+        try {
+            return JSON.stringify(error);
+        } catch {
+            return String(error);
+        }
+    };
+
     const resolvePermissionMode = (value: unknown): PermissionMode => {
         const parsed = PermissionModeSchema.safeParse(value);
         if (!parsed.success || !isPermissionModeAllowedForFlavor(parsed.data, 'codex')) {
@@ -156,7 +170,7 @@ export async function runCodex(opts: {
         });
     } catch (error) {
         lifecycle.markCrash(error);
-        logger.debug('[codex] Loop error:', error);
+        logger.debug('[codex] Loop error detail:', describeError(error));
     } finally {
         const localFailure = sessionWrapperRef.current?.localLaunchFailure;
         if (localFailure?.exitReason === 'exit') {
