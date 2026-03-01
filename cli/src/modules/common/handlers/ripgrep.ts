@@ -29,7 +29,7 @@ export function registerRipgrepHandlers(rpcHandlerManager: RpcHandlerManager, wo
         }
 
         try {
-            const result = await runRipgrep(data.args, { cwd: data.cwd })
+            const result = await runRipgrep(data.args, { cwd: data.cwd ?? workingDirectory })
             return {
                 success: true,
                 exitCode: result.exitCode,

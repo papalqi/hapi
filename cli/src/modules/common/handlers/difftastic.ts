@@ -29,7 +29,7 @@ export function registerDifftasticHandlers(rpcHandlerManager: RpcHandlerManager,
         }
 
         try {
-            const result = await runDifftastic(data.args, { cwd: data.cwd })
+            const result = await runDifftastic(data.args, { cwd: data.cwd ?? workingDirectory })
             return {
                 success: true,
                 exitCode: result.exitCode,

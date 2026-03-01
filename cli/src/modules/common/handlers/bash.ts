@@ -34,7 +34,7 @@ export function registerBashHandlers(rpcHandlerManager: RpcHandlerManager, worki
 
         try {
             const options: ExecOptions = {
-                cwd: data.cwd,
+                cwd: data.cwd ?? workingDirectory,
                 timeout: data.timeout || 30000
             }
 

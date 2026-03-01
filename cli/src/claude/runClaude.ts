@@ -29,7 +29,7 @@ export interface StartOptions {
 }
 
 export async function runClaude(options: StartOptions = {}): Promise<void> {
-    const workingDirectory = process.cwd();
+    const workingDirectory = process.env.HAPI_SPAWN_CWD?.trim() || process.cwd();
     const startedBy = options.startedBy ?? 'terminal';
 
     // Log environment info at startup

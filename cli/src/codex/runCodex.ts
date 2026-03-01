@@ -22,7 +22,7 @@ export async function runCodex(opts: {
     model?: string;
     reasoningEffort?: import('./appServerTypes').ReasoningEffort;
 }): Promise<void> {
-    const workingDirectory = process.cwd();
+    const workingDirectory = process.env.HAPI_SPAWN_CWD?.trim() || process.cwd();
     const startedBy = opts.startedBy ?? 'terminal';
 
     logger.debug(`[codex] Starting with options: startedBy=${startedBy}`);

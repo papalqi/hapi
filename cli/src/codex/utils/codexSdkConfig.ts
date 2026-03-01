@@ -68,7 +68,7 @@ export function buildCodexSdkThreadOptions(args: {
         approvalPolicy,
         sandboxMode,
         workingDirectory: args.cwd,
-        skipGitRepoCheck: false,
+        skipGitRepoCheck: true,
         ...(args.mode.model ? { model: args.mode.model } : {}),
         ...(modelReasoningEffort ? { modelReasoningEffort } : {})
     };

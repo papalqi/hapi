@@ -26,7 +26,7 @@
  */
 
 import { spawn, SpawnOptions, type ChildProcess } from 'child_process';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { isBunCompiled, projectPath } from '@/projectPath';
 import { logger } from '@/ui/logger';
 import { existsSync } from 'node:fs';
@@ -85,6 +85,11 @@ export function spawnHappyCLI(args: string[], options: SpawnOptions = {}): Child
   } else {
     directory = process.cwd()
   }
+
+  let desiredCwdForHapiProcess: string | undefined;
+  if (typeof directory === 'string') {
+    desiredCwdForHapiProcess = directory;
+  }
   // Note: We're executing the current runtime with the calculated entrypoint path below,
   // bypassing the 'hapi' wrapper that would normally be found in the shell's PATH.
   // However, we log it as 'hapi' here because other engineers are typically looking
@@ -104,6 +109,38 @@ export function spawnHappyCLI(args: string[], options: SpawnOptions = {}): Child
       throw new Error(errorMessage);
     }
   }
+
+  let finalOptions = options;
+
+  if (!isBunCompiled()) {
+    const isBunRuntime = Boolean((process.versions as Record<string, string | undefined>).bun);
+
+    // Bun resolves tsconfig path aliases relative to the process cwd (defaults to $cwd/tsconfig.json).
+    // When the runner spawns a session, it sets `cwd` to the target directory; that breaks `@/*` imports.
+    // Workaround: spawn Bun from the CLI project root (so tsconfig.json is found) and pass the desired
+    // session cwd via env (HAPI_SPAWN_CWD). Session launchers use it instead of process.cwd().
+    if (isBunRuntime && desiredCwdForHapiProcess) {
+      const projectRoot = projectPath();
+      const normalizedDesired = resolve(desiredCwdForHapiProcess);
+      const normalizedProjectRoot = resolve(projectRoot);
+      const sameCwd = process.platform === 'win32'
+        ? normalizedDesired.toLowerCase() === normalizedProjectRoot.toLowerCase()
+        : normalizedDesired === normalizedProjectRoot;
+
+      if (!sameCwd) {
+        logger.debug(`[SPAWN HAPI CLI] Bun dev-mode cwd override: bunCwd=${normalizedProjectRoot}, hapiCwd=${normalizedDesired}`);
+        finalOptions = {
+          ...options,
+          cwd: normalizedProjectRoot,
+          env: {
+            ...process.env,
+            ...(options.env ?? {}),
+            HAPI_SPAWN_CWD: normalizedDesired
+          }
+        };
+      }
+    }
+  }
   
-  return spawn(spawnCommand, spawnArgs, options);
+  return spawn(spawnCommand, spawnArgs, finalOptions);
 }

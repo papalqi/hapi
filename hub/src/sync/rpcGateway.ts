@@ -122,6 +122,7 @@ export class RpcGateway {
                 {
                     type: 'spawn-in-directory',
                     directory,
+                    approvedNewDirectoryCreation: true,
                     agent,
                     model,
                     reasoningEffort,
@@ -132,6 +133,9 @@ export class RpcGateway {
                     resumeSessionId
                 }
             )
+            if (typeof result === 'string' && result.trim().length > 0) {
+                return { type: 'error', message: result }
+            }
             if (result && typeof result === 'object') {
                 const obj = result as Record<string, unknown>
                 if (obj.type === 'success' && typeof obj.sessionId === 'string') {
@@ -139,6 +143,15 @@ export class RpcGateway {
                 }
                 if (obj.type === 'error' && typeof obj.errorMessage === 'string') {
                     return { type: 'error', message: obj.errorMessage }
+                }
+                if (typeof obj.error === 'string' && obj.error.length > 0) {
+                    return { type: 'error', message: obj.error }
+                }
+                if (obj.type === 'requestToApproveDirectoryCreation' && typeof obj.directory === 'string') {
+                    return {
+                        type: 'error',
+                        message: `Runner requires approval to create directory: ${obj.directory}`
+                    }
                 }
             }
             return { type: 'error', message: 'Unexpected spawn result' }

@@ -21,7 +21,7 @@ export async function runGemini(opts: {
     permissionMode?: PermissionMode;
     model?: string;
 } = {}): Promise<void> {
-    const workingDirectory = process.cwd();
+    const workingDirectory = process.env.HAPI_SPAWN_CWD?.trim() || process.cwd();
     const startedBy = opts.startedBy ?? 'terminal';
 
     logger.debug(`[gemini] Starting with options: startedBy=${startedBy}, startingMode=${opts.startingMode}`);

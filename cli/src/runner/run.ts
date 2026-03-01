@@ -444,25 +444,67 @@ export async function startRunner(): Promise<void> {
         // Wait for webhook to populate session with happySessionId
         logger.debug(`[RUNNER RUN] Waiting for session webhook for PID ${pid}`);
 
+        const spawnedProcess = happyProcess;
         const spawnResult = await new Promise<SpawnSessionResult>((resolve) => {
+          let settled = false;
+
+          const formatStderrTailForMessage = (): string => {
+            const trimmed = stderrTail.trim();
+            if (!trimmed) return '';
+            const maxChars = 1500;
+            const preview = trimmed.length > maxChars ? trimmed.slice(-maxChars) : trimmed;
+            return `\n\nChild stderr tail:\n${preview}`;
+          };
+
+          const settle = (value: SpawnSessionResult) => {
+            if (settled) return;
+            settled = true;
+            pidToAwaiter.delete(pid);
+            resolve(value);
+          };
+
           // Set timeout for webhook
           const timeout = setTimeout(() => {
-            pidToAwaiter.delete(pid);
+            if (settled) return;
             logger.debug(`[RUNNER RUN] Session webhook timeout for PID ${pid}`);
             logStderrTail();
-            resolve({
+            settle({
               type: 'error',
-              errorMessage: `Session webhook timeout for PID ${pid}`
+              errorMessage: `Session webhook timeout for PID ${pid}${formatStderrTailForMessage()}`
             });
             // 15 second timeout - I have seen timeouts on 10 seconds
             // even though session was still created successfully in ~2 more seconds
           }, 15_000);
 
+          spawnedProcess.once('exit', (code, signal) => {
+            if (settled) return;
+            clearTimeout(timeout);
+            logger.debug(`[RUNNER RUN] Child PID ${pid} exited before session webhook`, { code, signal });
+            logStderrTail();
+            settle({
+              type: 'error',
+              errorMessage: `Child PID ${pid} exited before session webhook (code ${code}${signal ? `, signal ${signal}` : ''})${formatStderrTailForMessage()}`
+            });
+          });
+
+          spawnedProcess.once('error', (error) => {
+            if (settled) return;
+            clearTimeout(timeout);
+            logger.debug(`[RUNNER RUN] Child PID ${pid} error before session webhook`, error);
+            logStderrTail();
+            const message = error instanceof Error ? error.message : String(error);
+            settle({
+              type: 'error',
+              errorMessage: `Child PID ${pid} error before session webhook: ${message}${formatStderrTailForMessage()}`
+            });
+          });
+
           // Register awaiter
           pidToAwaiter.set(pid, (completedSession) => {
+            if (settled) return;
             clearTimeout(timeout);
             logger.debug(`[RUNNER RUN] Session ${completedSession.happySessionId} fully spawned with webhook`);
-            resolve({
+            settle({
               type: 'success',
               sessionId: completedSession.happySessionId!
             });
