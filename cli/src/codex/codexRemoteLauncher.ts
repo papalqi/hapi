@@ -779,7 +779,11 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
                 }
             });
         } else if (useSdk && sdkClient) {
-            await sdkClient.connect();
+            await sdkClient.connect({
+                sdkOptions: buildCodexSdkOptions({
+                    mcpServers
+                })
+            });
         } else if (mcpClient) {
             await mcpClient.connect();
         }
