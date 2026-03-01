@@ -1,5 +1,6 @@
 export type AgentType = 'claude' | 'codex' | 'gemini' | 'opencode'
 export type SessionType = 'simple' | 'worktree'
+export type CodexTransportType = 'auto' | 'app-server' | 'mcp' | 'sdk'
 
 export const MODEL_OPTIONS: Record<AgentType, { value: string; label: string }[]> = {
     claude: [

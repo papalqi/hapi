@@ -7,6 +7,7 @@ export interface SpawnSessionOptions {
     agent?: 'claude' | 'codex' | 'gemini' | 'opencode'
     model?: string
     reasoningEffort?: string
+    codexTransport?: 'auto' | 'app-server' | 'mcp' | 'sdk'
     yolo?: boolean
     token?: string
     sessionType?: 'simple' | 'worktree'

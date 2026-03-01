@@ -44,6 +44,16 @@ export function buildMachineMetadata(): MachineMetadata {
     }
 }
 
+function resolveCodexTransportFromEnv(): 'app-server' | 'mcp' | 'sdk' {
+    if (process.env.CODEX_USE_SDK === '1') {
+        return 'sdk'
+    }
+    if (process.env.CODEX_USE_MCP_SERVER === '1') {
+        return 'mcp'
+    }
+    return 'app-server'
+}
+
 export function buildSessionMetadata(options: {
     flavor: string
     startedBy: SessionStartedBy
@@ -71,7 +81,10 @@ export function buildSessionMetadata(options: {
         lifecycleState: 'running',
         lifecycleStateSince: now,
         flavor: options.flavor,
-        worktree: worktreeInfo ?? undefined
+        worktree: worktreeInfo ?? undefined,
+        ...(options.flavor === 'codex'
+            ? { codexTransport: resolveCodexTransportFromEnv() }
+            : {})
     }
 
     // 如果有 worktree 信息，设置会话名称为 worktree 名称

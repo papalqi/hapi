@@ -180,6 +180,7 @@ export async function startRunner(): Promise<void> {
       const { directory, sessionId, machineId, approvedNewDirectoryCreation = true } = options;
       const agent = options.agent ?? 'claude';
       const reasoningEffort = options.reasoningEffort;
+      const codexTransport = options.codexTransport ?? 'auto';
       const yolo = options.yolo === true;
       const sessionType = options.sessionType ?? 'simple';
       const worktreeName = options.worktreeName;
@@ -308,6 +309,28 @@ export async function startRunner(): Promise<void> {
           } else if (options.agent === 'claude' || !options.agent) {
             extraEnv = {
               CLAUDE_CODE_OAUTH_TOKEN: options.token
+            };
+          }
+        }
+
+        if (agent === 'codex') {
+          if (codexTransport === 'sdk') {
+            extraEnv = {
+              ...extraEnv,
+              CODEX_USE_SDK: '1',
+              CODEX_USE_MCP_SERVER: '0'
+            };
+          } else if (codexTransport === 'mcp') {
+            extraEnv = {
+              ...extraEnv,
+              CODEX_USE_SDK: '0',
+              CODEX_USE_MCP_SERVER: '1'
+            };
+          } else if (codexTransport === 'app-server') {
+            extraEnv = {
+              ...extraEnv,
+              CODEX_USE_SDK: '0',
+              CODEX_USE_MCP_SERVER: '0'
             };
           }
         }

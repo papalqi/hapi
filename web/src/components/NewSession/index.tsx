@@ -10,6 +10,7 @@ import { useRecentPaths } from '@/hooks/useRecentPaths'
 import type { AgentType, SessionType } from './types'
 import { ActionButtons } from './ActionButtons'
 import { AgentSelector } from './AgentSelector'
+import { CodexTransportSelector } from './CodexTransportSelector'
 import { DirectorySection } from './DirectorySection'
 import { MachineSelector } from './MachineSelector'
 import { ModelSelector } from './ModelSelector'
@@ -44,6 +45,7 @@ export function NewSession(props: {
     const [agent, setAgent] = useState<AgentType>(loadPreferredAgent)
     const [model, setModel] = useState('auto')
     const [reasoningEffort, setReasoningEffort] = useState('auto')
+    const [codexTransport, setCodexTransport] = useState<'auto' | 'app-server' | 'mcp' | 'sdk'>('auto')
     const [yoloMode, setYoloMode] = useState(loadPreferredYoloMode)
     const [sessionType, setSessionType] = useState<SessionType>('simple')
     const [worktreeName, setWorktreeName] = useState('')
@@ -71,8 +73,6 @@ export function NewSession(props: {
     useEffect(() => {
         savePreferredYoloMode(yoloMode)
     }, [yoloMode])
-
-    useEffect(() => {
         if (props.machines.length === 0) return
         if (machineId && props.machines.find((m) => m.id === machineId)) return
 
@@ -87,6 +87,12 @@ export function NewSession(props: {
             setMachineId(props.machines[0].id)
         }
     }, [props.machines, machineId, getLastUsedMachineId, getRecentPaths])
+
+    useEffect(() => {
+        if (agent !== 'codex') {
+            setCodexTransport('auto')
+        }
+    }, [agent])
 
     const recentPaths = useMemo(
         () => getRecentPaths(machineId),
@@ -219,12 +225,16 @@ export function NewSession(props: {
             const resolvedReasoningEffort = agent === 'codex' && reasoningEffort !== 'auto'
                 ? reasoningEffort
                 : undefined
+            const resolvedCodexTransport = agent === 'codex' && codexTransport !== 'auto'
+                ? codexTransport
+                : undefined
             const result = await spawnSession({
                 machineId,
                 directory: directory.trim(),
                 agent,
                 model: resolvedModel,
                 reasoningEffort: resolvedReasoningEffort,
+                codexTransport: resolvedCodexTransport,
                 yolo: yoloMode,
                 sessionType,
                 worktreeName: sessionType === 'worktree' ? (worktreeName.trim() || undefined) : undefined
@@ -294,6 +304,12 @@ export function NewSession(props: {
                 value={reasoningEffort}
                 isDisabled={isFormDisabled}
                 onChange={setReasoningEffort}
+            />
+            <CodexTransportSelector
+                agent={agent}
+                value={codexTransport}
+                isDisabled={isFormDisabled}
+                onChange={setCodexTransport}
             />
             <YoloToggle
                 yoloMode={yoloMode}
