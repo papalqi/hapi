@@ -73,6 +73,8 @@ export function NewSession(props: {
     useEffect(() => {
         savePreferredYoloMode(yoloMode)
     }, [yoloMode])
+
+    useEffect(() => {
         if (props.machines.length === 0) return
         if (machineId && props.machines.find((m) => m.id === machineId)) return
 
