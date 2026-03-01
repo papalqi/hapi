@@ -52,6 +52,12 @@ function asNumber(value: unknown): number | null {
     return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
+function normalizeItemType(value: unknown): string | null {
+    const raw = asString(value);
+    if (!raw) return null;
+    return raw.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
 function toText(value: unknown): string {
     if (typeof value === 'string') return value;
     if (typeof value === 'number' || typeof value === 'boolean') return String(value);
@@ -279,6 +285,8 @@ export class CodexSdkClient {
     }
 
     private async consumeTurnEvents(turnId: string, events: AsyncGenerator<SdkThreadEvent>): Promise<void> {
+        const reasoningItemIds = new Set<string>();
+
         for await (const event of events) {
             const eventRecord = asRecord(event);
             const eventType = asString(eventRecord?.type);
@@ -293,6 +301,7 @@ export class CodexSdkClient {
             }
 
             if (eventType === 'turn.started') {
+                reasoningItemIds.clear();
                 this.emit({ type: 'task_started', turn_id: turnId });
                 continue;
             }
@@ -368,6 +377,19 @@ export class CodexSdkClient {
                 continue;
             }
 
+            if (eventType === 'exec_approval_request' || eventType === 'exec.approval_request' || eventType === 'approval.requested') {
+                const callId = asString(eventRecord?.call_id ?? eventRecord?.callId ?? eventRecord?.id) ?? randomUUID();
+                this.emit({
+                    type: 'exec_approval_request',
+                    call_id: callId,
+                    ...(asString(eventRecord?.command) ? { command: asString(eventRecord?.command) } : {}),
+                    ...(asString(eventRecord?.cwd) ? { cwd: asString(eventRecord?.cwd) } : {}),
+                    ...(asString(eventRecord?.message) ? { message: asString(eventRecord?.message) } : {}),
+                    ...(asString(eventRecord?.tool) ? { tool: asString(eventRecord?.tool) } : {})
+                });
+                continue;
+            }
+
             if (eventType === 'error') {
                 const errorRecord = asRecord(eventRecord?.error);
                 const message = asString(eventRecord?.message) ?? asString(errorRecord?.message) ?? 'Unknown SDK stream error';
@@ -385,11 +407,11 @@ export class CodexSdkClient {
 
             if (eventType === 'item.started' || eventType === 'item.updated' || eventType === 'item.completed') {
                 const item = asRecord(eventRecord?.item);
-                const itemType = asString(item?.type);
+                const itemType = normalizeItemType(item?.type);
                 const itemId = asString(item?.id);
                 if (!item || !itemType || !itemId) continue;
 
-                if (itemType === 'agent_message') {
+                if (itemType === 'agentmessage') {
                     if (eventType === 'item.completed') {
                         const text = asString(item.text) ?? extractTextFromContent(item.content);
                         if (text) {
@@ -400,6 +422,18 @@ export class CodexSdkClient {
                 }
 
                 if (itemType === 'reasoning') {
+                    if (eventType === 'item.started') {
+                        if (!reasoningItemIds.has(itemId) && reasoningItemIds.size > 0) {
+                            this.emit({ type: 'agent_reasoning_section_break' });
+                        }
+                        reasoningItemIds.add(itemId);
+                    } else if (eventType === 'item.updated' && !reasoningItemIds.has(itemId)) {
+                        if (reasoningItemIds.size > 0) {
+                            this.emit({ type: 'agent_reasoning_section_break' });
+                        }
+                        reasoningItemIds.add(itemId);
+                    }
+
                     const text = asString(item.text) ?? extractTextFromContent(item.content) ?? '';
                     if (eventType === 'item.updated') {
                         const prev = this.reasoningBuffers.get(itemId) ?? '';
@@ -420,7 +454,7 @@ export class CodexSdkClient {
                     continue;
                 }
 
-                if (itemType === 'command_execution') {
+                if (itemType === 'commandexecution') {
                     const command = asString(item.command);
                     const output = asString(item.aggregated_output) ?? '';
                     if (eventType === 'item.started') {
@@ -449,7 +483,7 @@ export class CodexSdkClient {
                     continue;
                 }
 
-                if (itemType === 'file_change') {
+                if (itemType === 'filechange') {
                     const changes = Array.isArray(item.changes) ? item.changes : [];
                     if (eventType === 'item.started') {
                         this.emit({
@@ -469,7 +503,22 @@ export class CodexSdkClient {
                     continue;
                 }
 
-                if (itemType === 'mcp_tool_call') {
+                if (itemType === 'execapprovalrequest' || itemType === 'approvalrequest') {
+                    if (eventType === 'item.started' || eventType === 'item.updated' || eventType === 'item.completed') {
+                        this.emit({
+                            type: 'exec_approval_request',
+                            call_id: itemId,
+                            ...(asString(item.command) ? { command: asString(item.command) } : {}),
+                            ...(asString(item.cwd) ? { cwd: asString(item.cwd) } : {}),
+                            ...(asString(item.message) ? { message: asString(item.message) } : {}),
+                            ...(asString(item.tool) ? { tool: asString(item.tool) } : {}),
+                            ...(asString(item.status) ? { status: asString(item.status) } : {})
+                        });
+                    }
+                    continue;
+                }
+
+                if (itemType === 'mcptoolcall') {
                     const server = asString(item.server) ?? 'mcp';
                     const tool = asString(item.tool) ?? 'tool';
                     const commandLabel = this.toolCallCommandLabels.get(itemId) ?? `mcp:${server}/${tool}`;
@@ -499,7 +548,7 @@ export class CodexSdkClient {
                     continue;
                 }
 
-                if (itemType === 'web_search') {
+                if (itemType === 'websearch') {
                     const query = asString(item.query) ?? '';
                     const commandLabel = this.toolCallCommandLabels.get(itemId)
                         ?? (query ? `web_search ${query}` : 'web_search');
@@ -523,7 +572,7 @@ export class CodexSdkClient {
                     continue;
                 }
 
-                if (itemType === 'todo_list') {
+                if (itemType === 'todolist') {
                     if (eventType === 'item.updated' || eventType === 'item.completed') {
                         const todos = Array.isArray(item.items)
                             ? item.items

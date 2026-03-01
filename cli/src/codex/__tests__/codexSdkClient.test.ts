@@ -217,4 +217,52 @@ describe('CodexSdkClient', () => {
             error: 'failed after errors'
         });
     });
+
+    it('maps reasoning section breaks and approval request events', async () => {
+        const client = new CodexSdkClient();
+        const emitted: Array<Record<string, unknown>> = [];
+        client.setHandler((event) => emitted.push(event));
+
+        const thread = {
+            id: 'thread-5',
+            runStreamed: vi.fn(async () => ({
+                events: createEventStream([
+                    { type: 'turn.started' },
+                    { type: 'item.started', item: { id: 'reason-1', type: 'reasoning', text: '' } },
+                    { type: 'item.updated', item: { id: 'reason-1', type: 'reasoning', text: 'first section' } },
+                    { type: 'item.started', item: { id: 'reason-2', type: 'reasoning', text: '' } },
+                    { type: 'item.updated', item: { id: 'reason-2', type: 'reasoning', text: 'second section' } },
+                    {
+                        type: 'item.started',
+                        item: {
+                            id: 'approve-1',
+                            type: 'exec_approval_request',
+                            command: 'rm -rf /tmp/test',
+                            cwd: '/tmp',
+                            message: 'Need approval'
+                        }
+                    },
+                    { type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } }
+                ])
+            }))
+        };
+
+        (client as any).thread = thread;
+        await client.startTurn({
+            turnId: 'turn-reasoning',
+            input: [{ type: 'text', text: 'reason and ask approval' }]
+        });
+        await (client as any).activeTurnPromise;
+
+        const sectionBreaks = emitted.filter((event) => event.type === 'agent_reasoning_section_break');
+        expect(sectionBreaks.length).toBe(1);
+
+        expect(emitted).toContainEqual({
+            type: 'exec_approval_request',
+            call_id: 'approve-1',
+            command: 'rm -rf /tmp/test',
+            cwd: '/tmp',
+            message: 'Need approval'
+        });
+    });
 });

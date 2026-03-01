@@ -26,7 +26,11 @@ const DIRECT_EVENT_TYPE_ALIASES: Record<string, string> = {
     agent_reasoning_delta: 'agent_reasoning_delta',
     'agent/reasoning/section_break': 'agent_reasoning_section_break',
     agent_reasoning_section_break: 'agent_reasoning_section_break',
+    'exec/approval_request': 'exec_approval_request',
     token_count: 'token_count',
+    'todo/list': 'todo_list',
+    todo_list: 'todo_list',
+    plan: 'todo_list',
     exec_command_begin: 'exec_command_begin',
     exec_command_end: 'exec_command_end',
     exec_approval_request: 'exec_approval_request',
@@ -48,6 +52,7 @@ const DIRECT_EVENT_TYPES = new Set<string>([
     'agent_reasoning_delta',
     'agent_reasoning_section_break',
     'token_count',
+    'todo_list',
     'exec_command_begin',
     'exec_command_end',
     'exec_approval_request',
@@ -205,6 +210,19 @@ export class AppServerEventConverter {
             const text = asString(record.text ?? record.message ?? record.content);
             if (text && converted.text === undefined) {
                 converted.text = text;
+            }
+        }
+
+        if (normalizedType === 'todo_list') {
+            const items = Array.isArray(record.items)
+                ? record.items
+                : Array.isArray(record.todos)
+                    ? record.todos
+                    : Array.isArray(record.entries)
+                        ? record.entries
+                        : null;
+            if (items && converted.items === undefined) {
+                converted.items = items;
             }
         }
 
@@ -378,6 +396,7 @@ export class AppServerEventConverter {
     handleNotification(method: string, params: unknown): ConvertedEvent[] {
         const events: ConvertedEvent[] = [];
         const paramsRecord = asRecord(params) ?? {};
+        const normalizedMethod = method.toLowerCase();
 
         const wrappedEvents = this.handleCodexWrappedNotification(method, paramsRecord);
         if (wrappedEvents !== null) {
@@ -436,6 +455,24 @@ export class AppServerEventConverter {
         if (method === 'thread/tokenUsage/updated') {
             const info = asRecord(paramsRecord.tokenUsage ?? paramsRecord.token_usage ?? paramsRecord) ?? {};
             events.push({ type: 'token_count', info });
+            return events;
+        }
+
+        if (
+            normalizedMethod === 'todo_list'
+            || normalizedMethod.includes('todo/list')
+            || normalizedMethod.includes('todolist')
+            || normalizedMethod === 'plan'
+            || normalizedMethod.endsWith('/plan')
+        ) {
+            const items = Array.isArray(paramsRecord.items)
+                ? paramsRecord.items
+                : Array.isArray(paramsRecord.todos)
+                    ? paramsRecord.todos
+                    : Array.isArray(paramsRecord.entries)
+                        ? paramsRecord.entries
+                        : [];
+            events.push({ type: 'todo_list', items });
             return events;
         }
 
@@ -511,7 +548,7 @@ export class AppServerEventConverter {
             return events;
         }
 
-        if (method === 'item/started' || method === 'item/completed') {
+        if (method === 'item/started' || method === 'item/updated' || method === 'item/completed') {
             const item = extractItem(paramsRecord);
             if (!item) return events;
 
@@ -620,6 +657,24 @@ export class AppServerEventConverter {
                     });
 
                     this.fileChangeMeta.delete(itemId);
+                }
+
+                return events;
+            }
+
+            if (itemType === 'todolist') {
+                if (method === 'item/updated' || method === 'item/completed' || method === 'item/started') {
+                    const items = Array.isArray(item.items)
+                        ? item.items
+                        : Array.isArray(item.todos)
+                            ? item.todos
+                            : Array.isArray(item.entries)
+                                ? item.entries
+                                : [];
+                    events.push({
+                        type: 'todo_list',
+                        items
+                    });
                 }
 
                 return events;

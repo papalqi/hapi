@@ -9,7 +9,9 @@ type CodexReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
 function resolveApprovalPolicy(mode: EnhancedMode): CodexApprovalPolicy {
     switch (mode.permissionMode) {
-        case 'default': return 'untrusted';
+        // Codex SDK currently does not expose an approval callback API that HAPI can bridge.
+        // Use on-failure to keep remote turns non-blocking in SDK transport.
+        case 'default': return 'on-failure';
         case 'read-only': return 'never';
         case 'safe-yolo': return 'on-failure';
         case 'yolo': return 'on-failure';

@@ -233,7 +233,7 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
             for (const item of value) {
                 const record = asRecord(item);
                 if (!record) continue;
-                const content = asString(record.text ?? record.content);
+                const content = asString(record.text ?? record.content ?? record.description ?? record.title);
                 if (!content) continue;
 
                 const rawStatus = asString(record.status);
@@ -261,6 +261,40 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
             }
 
             return entries;
+        };
+
+        const unwrapMcpWrapperEvent = (msg: Record<string, unknown>): Record<string, unknown> | null => {
+            const wrapperType = asString(msg.type);
+            const payload = asRecord(msg.payload);
+            if (!wrapperType || !payload) {
+                return null;
+            }
+
+            if (wrapperType === 'event_msg') {
+                const payloadTypeRaw = asString(payload.type);
+                if (!payloadTypeRaw) return null;
+
+                const payloadType = payloadTypeRaw
+                    .trim()
+                    .toLowerCase()
+                    .replace(/^codex\/event\//, '')
+                    .replace(/[\/\s-]+/g, '_');
+
+                if (payloadType === 'plan') {
+                    return {
+                        ...payload,
+                        type: 'todo_list',
+                        items: payload.items ?? payload.todos ?? payload.entries
+                    };
+                }
+
+                return {
+                    ...payload,
+                    type: payloadType
+                };
+            }
+
+            return null;
         };
 
         const shouldForceSessionReset = (rawMessage: string): boolean => {
@@ -426,6 +460,14 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
         const handleCodexEvent = (msg: Record<string, unknown>) => {
             const msgType = asString(msg.type);
             if (!msgType) return;
+
+            if (!useAppServer && !useSdk && (msgType === 'event_msg' || msgType === 'response_item')) {
+                const unwrapped = unwrapMcpWrapperEvent(msg);
+                if (unwrapped) {
+                    handleCodexEvent(unwrapped);
+                    return;
+                }
+            }
 
             const isTerminalEvent = shouldTreatAsTerminalEvent(msgType, msg);
 
@@ -610,7 +652,16 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
                 });
             }
             if (msgType === 'todo_list') {
-                const entries = normalizeTodoEntries(msg.items);
+                const entries = normalizeTodoEntries(msg.items ?? msg.todos ?? msg.entries);
+                if (entries.length > 0) {
+                    session.sendCodexMessage({
+                        type: 'plan',
+                        entries
+                    });
+                }
+            }
+            if (msgType === 'plan') {
+                const entries = normalizeTodoEntries(msg.entries ?? msg.items ?? msg.todos);
                 if (entries.length > 0) {
                     session.sendCodexMessage({
                         type: 'plan',

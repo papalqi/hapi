@@ -85,6 +85,30 @@ describe('AppServerEventConverter', () => {
         expect(events).toEqual([{ type: 'turn_diff', unified_diff: 'diff --git a b' }]);
     });
 
+    it('maps todo list updates from dedicated methods and item updates', () => {
+        const converter = new AppServerEventConverter();
+
+        const listEvents = converter.handleNotification('todo/list/updated', {
+            items: [{ text: 'ship sdk', status: 'in_progress' }]
+        });
+        expect(listEvents).toEqual([{
+            type: 'todo_list',
+            items: [{ text: 'ship sdk', status: 'in_progress' }]
+        }]);
+
+        const itemEvents = converter.handleNotification('item/updated', {
+            item: {
+                id: 'todo-1',
+                type: 'todo_list',
+                items: [{ text: 'ship sdk', status: 'completed' }]
+            }
+        });
+        expect(itemEvents).toEqual([{
+            type: 'todo_list',
+            items: [{ text: 'ship sdk', status: 'completed' }]
+        }]);
+    });
+
     it('unwraps codex/event/agent_message notifications', () => {
         const converter = new AppServerEventConverter();
 
@@ -103,6 +127,22 @@ describe('AppServerEventConverter', () => {
         });
 
         expect(events).toEqual([{ type: 'task_started', turn_id: 'turn-42' }]);
+    });
+
+    it('unwraps codex/event/plan notifications into todo_list', () => {
+        const converter = new AppServerEventConverter();
+
+        const events = converter.handleNotification('codex/event/plan', {
+            msg: {
+                entries: [{ content: 'verify pipeline', status: 'pending' }]
+            }
+        });
+
+        expect(events).toEqual([{
+            type: 'todo_list',
+            entries: [{ content: 'verify pipeline', status: 'pending' }],
+            items: [{ content: 'verify pipeline', status: 'pending' }]
+        }]);
     });
 
     it('unwraps codex/event/error and codex/event/stream_error notifications', () => {
