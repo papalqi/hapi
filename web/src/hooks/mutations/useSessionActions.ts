@@ -12,6 +12,7 @@ export function useSessionActions(
     agentFlavor?: string | null
 ): {
     abortSession: () => Promise<void>
+    recoverSession: () => Promise<string>
     archiveSession: () => Promise<void>
     switchSession: () => Promise<void>
     setPermissionMode: (mode: PermissionMode) => Promise<void>
@@ -34,6 +35,16 @@ export function useSessionActions(
                 throw new Error('Session unavailable')
             }
             await api.abortSession(sessionId)
+        },
+        onSuccess: () => void invalidateSession(),
+    })
+
+    const recoverMutation = useMutation({
+        mutationFn: async () => {
+            if (!api || !sessionId) {
+                throw new Error('Session unavailable')
+            }
+            return await api.recoverSession(sessionId)
         },
         onSuccess: () => void invalidateSession(),
     })
@@ -108,6 +119,7 @@ export function useSessionActions(
 
     return {
         abortSession: abortMutation.mutateAsync,
+        recoverSession: recoverMutation.mutateAsync,
         archiveSession: archiveMutation.mutateAsync,
         switchSession: switchMutation.mutateAsync,
         setPermissionMode: permissionMutation.mutateAsync,
@@ -115,6 +127,7 @@ export function useSessionActions(
         renameSession: renameMutation.mutateAsync,
         deleteSession: deleteMutation.mutateAsync,
         isPending: abortMutation.isPending
+            || recoverMutation.isPending
             || archiveMutation.isPending
             || switchMutation.isPending
             || permissionMutation.isPending

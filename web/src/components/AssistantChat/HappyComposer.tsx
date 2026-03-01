@@ -90,8 +90,9 @@ export function HappyComposer(props: {
     const api = useAssistantApi()
     const composerText = useAssistantState(({ composer }) => composer.text)
     const attachments = useAssistantState(({ composer }) => composer.attachments)
-    const threadIsRunning = useAssistantState(({ thread }) => thread.isRunning)
+    const runtimeThreadIsRunning = useAssistantState(({ thread }) => thread.isRunning)
     const threadIsDisabled = useAssistantState(({ thread }) => thread.isDisabled)
+    const threadIsRunning = runtimeThreadIsRunning || thinking
 
     const controlsDisabled = disabled || (!active && !allowSendWhenInactive) || threadIsDisabled
     const trimmed = composerText.trim()

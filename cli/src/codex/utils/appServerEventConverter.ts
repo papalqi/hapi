@@ -5,6 +5,70 @@ type ConvertedEvent = {
     [key: string]: unknown;
 };
 
+const DIRECT_EVENT_TYPE_ALIASES: Record<string, string> = {
+    'task/started': 'task_started',
+    task_started: 'task_started',
+    'task/completed': 'task_complete',
+    task_completed: 'task_complete',
+    task_complete: 'task_complete',
+    'turn/aborted': 'turn_aborted',
+    turn_aborted: 'turn_aborted',
+    'task/failed': 'task_failed',
+    task_failed: 'task_failed',
+    'stream/error': 'stream_error',
+    stream_error: 'stream_error',
+    error: 'error',
+    'agent/message': 'agent_message',
+    agent_message: 'agent_message',
+    'agent/reasoning': 'agent_reasoning',
+    agent_reasoning: 'agent_reasoning',
+    'agent/reasoning/delta': 'agent_reasoning_delta',
+    agent_reasoning_delta: 'agent_reasoning_delta',
+    'agent/reasoning/section_break': 'agent_reasoning_section_break',
+    agent_reasoning_section_break: 'agent_reasoning_section_break',
+    token_count: 'token_count',
+    exec_command_begin: 'exec_command_begin',
+    exec_command_end: 'exec_command_end',
+    exec_approval_request: 'exec_approval_request',
+    patch_apply_begin: 'patch_apply_begin',
+    patch_apply_end: 'patch_apply_end',
+    thread_started: 'thread_started',
+    turn_diff: 'turn_diff'
+};
+
+const DIRECT_EVENT_TYPES = new Set<string>([
+    'task_started',
+    'task_complete',
+    'turn_aborted',
+    'task_failed',
+    'stream_error',
+    'error',
+    'agent_message',
+    'agent_reasoning',
+    'agent_reasoning_delta',
+    'agent_reasoning_section_break',
+    'token_count',
+    'exec_command_begin',
+    'exec_command_end',
+    'exec_approval_request',
+    'patch_apply_begin',
+    'patch_apply_end',
+    'thread_started',
+    'turn_diff'
+]);
+
+function normalizeDirectEventType(value: string): string | null {
+    const normalized = value
+        .trim()
+        .toLowerCase()
+        .replace(/^codex\/event\//, '')
+        .replace(/[\s-]+/g, '_');
+    const aliased = DIRECT_EVENT_TYPE_ALIASES[normalized];
+    if (aliased) return aliased;
+    if (DIRECT_EVENT_TYPES.has(normalized)) return normalized;
+    return null;
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
     if (!value || typeof value !== 'object') {
         return null;
@@ -76,185 +140,248 @@ function extractChanges(value: unknown): Record<string, unknown> | null {
     return null;
 }
 
-function extractTextFromContent(value: unknown): string | null {
-    if (typeof value === 'string' && value.length > 0) {
-        return value;
-    }
-
-    if (!Array.isArray(value)) {
-        return null;
-    }
-
-    const chunks: string[] = [];
-    for (const entry of value) {
-        const record = asRecord(entry);
-        if (!record) continue;
-        const text = asString(record.text ?? record.message ?? record.content);
-        if (text) {
-            chunks.push(text);
-        }
-    }
-
-    if (chunks.length === 0) {
-        return null;
-    }
-
-    return chunks.join('');
-}
-
-function extractItemText(item: Record<string, unknown>): string | null {
-    return asString(item.text ?? item.message) ?? extractTextFromContent(item.content);
-}
-
-function extractReasoningText(item: Record<string, unknown>): string | null {
-    const direct = extractItemText(item);
-    if (direct) {
-        return direct;
-    }
-
-    const summary = item.summary_text ?? item.summaryText;
-    if (Array.isArray(summary)) {
-        const chunks = summary.filter((part): part is string => typeof part === 'string' && part.length > 0);
-        if (chunks.length > 0) {
-            return chunks.join('\n');
-        }
-    }
-
-    return null;
-}
-
 export class AppServerEventConverter {
     private readonly agentMessageBuffers = new Map<string, string>();
     private readonly reasoningBuffers = new Map<string, string>();
     private readonly commandOutputBuffers = new Map<string, string>();
     private readonly commandMeta = new Map<string, Record<string, unknown>>();
     private readonly fileChangeMeta = new Map<string, Record<string, unknown>>();
-    private readonly completedAgentMessageItems = new Set<string>();
-    private readonly completedReasoningItems = new Set<string>();
-    private readonly reasoningSectionBreakKeys = new Set<string>();
-    private readonly lastAgentMessageDeltaByItemId = new Map<string, string>();
-    private readonly lastReasoningDeltaByItemId = new Map<string, string>();
-    private readonly lastCommandOutputDeltaByItemId = new Map<string, string>();
+    private readonly unhandledMethods = new Map<string, { lastLoggedAt: number; suppressed: number }>();
+    private static readonly UNHANDLED_LOG_INTERVAL_MS = 30_000;
 
-    private handleWrappedCodexEvent(paramsRecord: Record<string, unknown>): ConvertedEvent[] | null {
-        const msg = asRecord(paramsRecord.msg);
-        if (!msg) {
+    private convertDirectEventRecord(record: Record<string, unknown>, typeHint?: string): ConvertedEvent[] {
+        const normalizedType = normalizeDirectEventType(asString(record.type) ?? typeHint ?? '');
+        if (!normalizedType) return [];
+
+        const willRetry = asBoolean(record.will_retry ?? record.willRetry) ?? false;
+        if ((normalizedType === 'error' || normalizedType === 'stream_error') && willRetry) {
             return [];
         }
 
-        const msgType = asString(msg.type);
-        if (!msgType) {
-            return [];
+        const converted: ConvertedEvent = {
+            ...record,
+            type: normalizedType
+        };
+
+        const turnId = asString(record.turn_id ?? record.turnId ?? asRecord(record.turn)?.id);
+        if (turnId && converted.turn_id === undefined) {
+            converted.turn_id = turnId;
         }
 
-        if (msgType === 'item_started' || msgType === 'item_completed') {
-            const itemMethod = msgType === 'item_started' ? 'item/started' : 'item/completed';
-            const item = asRecord(msg.item) ?? {};
-            const params: Record<string, unknown> = {
-                item,
-                itemId: asString(msg.item_id ?? msg.itemId ?? item.id),
-                threadId: asString(msg.thread_id ?? msg.threadId),
-                turnId: asString(msg.turn_id ?? msg.turnId)
-            };
-            return this.handleNotification(itemMethod, params);
+        const threadId = asString(record.thread_id ?? record.threadId ?? asRecord(record.thread)?.id);
+        if (threadId && converted.thread_id === undefined) {
+            converted.thread_id = threadId;
         }
 
-        if (
-            msgType === 'task_started' ||
-            msgType === 'task_complete' ||
-            msgType === 'turn_aborted' ||
-            msgType === 'task_failed'
-        ) {
-            const turnId = asString(msg.turn_id ?? msg.turnId);
-            if ((msgType === 'task_complete' || msgType === 'turn_aborted' || msgType === 'task_failed') && !turnId) {
-                logger.debug('[AppServerEventConverter] Ignoring wrapped terminal event without turn_id', { msgType });
-                return [];
+        if (normalizedType === 'task_failed') {
+            const errorMessage = asString(record.error ?? record.message ?? record.reason);
+            if (errorMessage && converted.error === undefined) {
+                converted.error = errorMessage;
             }
+        }
 
-            const event: ConvertedEvent = { type: msgType };
-            if (turnId) {
-                event.turn_id = turnId;
+        if (normalizedType === 'error' || normalizedType === 'stream_error') {
+            const message = asString(record.message ?? asRecord(record.error)?.message ?? record.reason);
+            if (message && converted.message === undefined) {
+                converted.message = message;
             }
-            if (msgType === 'task_failed') {
-                const error = asString(msg.error ?? msg.message ?? asRecord(msg.error)?.message);
-                if (error) {
-                    event.error = error;
+            const additionalDetails = record.additional_details
+                ?? record.additionalDetails
+                ?? asRecord(record.error)?.additional_details
+                ?? asRecord(record.error)?.additionalDetails;
+            if (additionalDetails !== undefined && converted.additional_details === undefined) {
+                converted.additional_details = additionalDetails;
+            }
+        }
+
+        if (normalizedType === 'agent_message') {
+            const message = asString(record.message ?? record.text ?? record.content);
+            if (message && converted.message === undefined) {
+                converted.message = message;
+            }
+        }
+
+        if (normalizedType === 'agent_reasoning') {
+            const text = asString(record.text ?? record.message ?? record.content);
+            if (text && converted.text === undefined) {
+                converted.text = text;
+            }
+        }
+
+        return [converted];
+    }
+
+    private handleCodexWrappedNotification(method: string, paramsRecord: Record<string, unknown>): ConvertedEvent[] | null {
+        if (method !== 'codex/event' && !method.startsWith('codex/event/')) {
+            return null;
+        }
+
+        const suffix = method.startsWith('codex/event/') ? method.slice('codex/event/'.length) : null;
+        const wrapped = asRecord(paramsRecord.msg ?? paramsRecord.event ?? paramsRecord.payload ?? paramsRecord.data);
+
+        if (wrapped) {
+            const nestedWrapped = asRecord(wrapped.msg);
+            if (nestedWrapped) {
+                const nestedEvents = this.convertDirectEventRecord(nestedWrapped);
+                if (nestedEvents.length > 0) {
+                    return nestedEvents;
                 }
             }
-            return [event];
-        }
 
-        if (msgType === 'agent_message_delta' || msgType === 'agent_message_content_delta') {
-            const itemId = asString(msg.item_id ?? msg.itemId ?? msg.id) ?? 'agent-message';
-            const delta = asString(msg.delta ?? msg.text ?? msg.message);
-            if (!delta) return [];
-            return this.handleNotification('item/agentMessage/delta', { itemId, delta });
-        }
-
-        if (msgType === 'reasoning_content_delta') {
-            const itemId = asString(msg.item_id ?? msg.itemId ?? msg.id) ?? 'reasoning';
-            const delta = asString(msg.delta ?? msg.text ?? msg.message);
-            if (!delta) return [];
-            return this.handleNotification('item/reasoning/summaryTextDelta', { itemId, delta });
-        }
-
-        if (msgType === 'agent_reasoning_section_break') {
-            const itemId = asString(msg.item_id ?? msg.itemId ?? msg.id) ?? 'reasoning';
-            const summaryIndex = asNumber(msg.summary_index ?? msg.summaryIndex);
-            return this.handleNotification('item/reasoning/summaryPartAdded', {
-                itemId,
-                ...(summaryIndex !== null ? { summaryIndex } : {})
-            });
-        }
-
-        if (msgType === 'agent_reasoning_delta' || msgType === 'agent_reasoning' || msgType === 'agent_message') {
-            return [];
-        }
-
-        if (msgType === 'exec_command_output_delta') {
-            const itemId = asString(msg.call_id ?? msg.callId ?? msg.item_id ?? msg.itemId ?? msg.id);
-            const delta = asString(msg.delta ?? msg.output ?? msg.stdout ?? msg.text);
-            if (!itemId || !delta) return [];
-            return this.handleNotification('item/commandExecution/outputDelta', { itemId, delta });
-        }
-
-        if (msgType === 'error') {
-            const errorRecord = asRecord(msg.error);
-            const willRetry = asBoolean(msg.will_retry ?? msg.willRetry ?? errorRecord?.will_retry ?? errorRecord?.willRetry) ?? false;
-            if (willRetry) {
-                return [];
+            const nestedMethod = asString(wrapped.method ?? wrapped.notification ?? wrapped.name);
+            if (nestedMethod && nestedMethod !== method) {
+                const nestedParams = asRecord(wrapped.params ?? wrapped.payload ?? wrapped.data) ?? wrapped;
+                return this.handleNotification(nestedMethod, nestedParams);
             }
-            const error = asString(msg.message ?? msg.reason ?? errorRecord?.message);
-            return error ? [{ type: 'task_failed', error }] : [];
+
+            if (suffix && suffix.includes('/')) {
+                const nestedParams = asRecord(wrapped.params ?? wrapped.payload ?? wrapped.data) ?? wrapped;
+                const directEvents = this.convertDirectEventRecord(nestedParams, suffix);
+                if (directEvents.length > 0) {
+                    return directEvents;
+                }
+
+                const nestedEvents = this.handleNotification(suffix, nestedParams);
+                if (nestedEvents.length > 0) {
+                    return nestedEvents;
+                }
+            }
+
+            const wrappedEvents = this.convertDirectEventRecord(wrapped, suffix ?? undefined);
+            if (wrappedEvents.length > 0) {
+                return wrappedEvents;
+            }
+        }
+
+        if (suffix && suffix.includes('/')) {
+            const nestedParams = asRecord(paramsRecord.params ?? paramsRecord.payload ?? paramsRecord.data) ?? paramsRecord;
+            const directEvents = this.convertDirectEventRecord(nestedParams, suffix);
+            if (directEvents.length > 0) {
+                return directEvents;
+            }
+
+            const nestedEvents = this.handleNotification(suffix, nestedParams);
+            if (nestedEvents.length > 0) {
+                return nestedEvents;
+            }
+        }
+
+        if (suffix) {
+            const directEvents = this.convertDirectEventRecord(paramsRecord, suffix);
+            if (directEvents.length > 0) {
+                return directEvents;
+            }
+        }
+
+        this.logUnhandled(method, paramsRecord);
+        return [];
+    }
+
+    private handleThreadStatusChanged(paramsRecord: Record<string, unknown>): ConvertedEvent[] {
+        const events: ConvertedEvent[] = [];
+        const statusRecord = asRecord(paramsRecord.status ?? paramsRecord.threadStatus ?? paramsRecord.thread_status);
+        const statusRaw = asString(
+            statusRecord?.type
+            ?? statusRecord?.status
+            ?? statusRecord?.state
+            ?? paramsRecord.status
+            ?? paramsRecord.state
+        );
+        const normalizedStatus = statusRaw?.toLowerCase().replace(/[\s_-]/g, '');
+
+        const thread = asRecord(paramsRecord.thread);
+        const threadId = asString(paramsRecord.thread_id ?? paramsRecord.threadId ?? thread?.id);
+        const turn = asRecord(paramsRecord.turn);
+        const turnId = asString(paramsRecord.turn_id ?? paramsRecord.turnId ?? turn?.id);
+
+        if (normalizedStatus === 'systemerror') {
+            const systemError = asRecord(
+                statusRecord?.systemError
+                ?? paramsRecord.systemError
+                ?? statusRecord?.error
+                ?? paramsRecord.error
+            );
+            const message = asString(systemError?.message ?? statusRecord?.message ?? paramsRecord.message ?? paramsRecord.reason)
+                ?? 'Codex thread entered systemError state';
+            const additionalDetails = systemError?.additional_details
+                ?? systemError?.additionalDetails
+                ?? paramsRecord.additional_details
+                ?? paramsRecord.additionalDetails;
+
+            events.push({
+                type: 'error',
+                message,
+                ...(threadId ? { thread_id: threadId } : {}),
+                ...(turnId ? { turn_id: turnId } : {}),
+                ...(additionalDetails !== undefined ? { additional_details: additionalDetails } : {})
+            });
+            return events;
+        }
+
+        if (normalizedStatus === 'completed' || normalizedStatus === 'complete' || normalizedStatus === 'done') {
+            events.push({ type: 'task_complete', ...(turnId ? { turn_id: turnId } : {}) });
+            return events;
         }
 
         if (
-            msgType === 'mcp_startup_update' ||
-            msgType === 'mcp_startup_complete' ||
-            msgType === 'plan_update' ||
-            msgType === 'skills_update_available' ||
-            msgType === 'stream_error' ||
-            msgType === 'warning' ||
-            msgType === 'context_compacted' ||
-            msgType === 'terminal_interaction' ||
-            msgType === 'user_message'
+            normalizedStatus === 'interrupted'
+            || normalizedStatus === 'cancelled'
+            || normalizedStatus === 'canceled'
+            || normalizedStatus === 'aborted'
         ) {
-            return [];
+            events.push({ type: 'turn_aborted', ...(turnId ? { turn_id: turnId } : {}) });
+            return events;
         }
 
-        return [msg as ConvertedEvent];
+        if (normalizedStatus === 'failed' || normalizedStatus === 'error') {
+            const errorMessage = asString(
+                paramsRecord.message
+                ?? paramsRecord.reason
+                ?? statusRecord?.message
+                ?? asRecord(paramsRecord.error)?.message
+            );
+            events.push({
+                type: 'task_failed',
+                ...(turnId ? { turn_id: turnId } : {}),
+                ...(errorMessage ? { error: errorMessage } : {})
+            });
+            return events;
+        }
+
+        return events;
+    }
+
+    private logUnhandled(method: string, params: unknown): void {
+        const now = Date.now();
+        const entry = this.unhandledMethods.get(method);
+        if (!entry) {
+            this.unhandledMethods.set(method, { lastLoggedAt: now, suppressed: 0 });
+            logger.debug('[AppServerEventConverter] Unhandled notification', { method, params });
+            return;
+        }
+
+        if (now - entry.lastLoggedAt < AppServerEventConverter.UNHANDLED_LOG_INTERVAL_MS) {
+            entry.suppressed += 1;
+            return;
+        }
+
+        const suppressed = entry.suppressed;
+        entry.lastLoggedAt = now;
+        entry.suppressed = 0;
+        logger.debug('[AppServerEventConverter] Unhandled notification (throttled)', {
+            method,
+            suppressed,
+            params
+        });
     }
 
     handleNotification(method: string, params: unknown): ConvertedEvent[] {
         const events: ConvertedEvent[] = [];
         const paramsRecord = asRecord(params) ?? {};
 
-        if (method.startsWith('codex/event/')) {
-            return this.handleWrappedCodexEvent(paramsRecord) ?? events;
-        }
-
-        if (method === 'account/rateLimits/updated' || method === 'turn/plan/updated' || method === 'thread/compacted') {
-            return events;
+        const wrappedEvents = this.handleCodexWrappedNotification(method, paramsRecord);
+        if (wrappedEvents !== null) {
+            return wrappedEvents;
         }
 
         if (method === 'thread/started' || method === 'thread/resumed') {
@@ -294,6 +421,10 @@ export class AppServerEventConverter {
             return events;
         }
 
+        if (method === 'thread/status/changed') {
+            return this.handleThreadStatusChanged(paramsRecord);
+        }
+
         if (method === 'turn/diff/updated') {
             const diff = asString(paramsRecord.diff ?? paramsRecord.unified_diff ?? paramsRecord.unifiedDiff);
             if (diff) {
@@ -311,9 +442,35 @@ export class AppServerEventConverter {
         if (method === 'error') {
             const willRetry = asBoolean(paramsRecord.will_retry ?? paramsRecord.willRetry) ?? false;
             if (willRetry) return events;
-            const message = asString(paramsRecord.message) ?? asString(asRecord(paramsRecord.error)?.message);
+            const message = asString(paramsRecord.message ?? paramsRecord.reason) ?? asString(asRecord(paramsRecord.error)?.message);
+            const additionalDetails = paramsRecord.additional_details
+                ?? paramsRecord.additionalDetails
+                ?? asRecord(paramsRecord.error)?.additional_details
+                ?? asRecord(paramsRecord.error)?.additionalDetails;
             if (message) {
-                events.push({ type: 'task_failed', error: message });
+                events.push({
+                    type: 'error',
+                    message,
+                    ...(additionalDetails !== undefined ? { additional_details: additionalDetails } : {})
+                });
+            }
+            return events;
+        }
+
+        if (method === 'stream_error') {
+            const willRetry = asBoolean(paramsRecord.will_retry ?? paramsRecord.willRetry) ?? false;
+            if (willRetry) return events;
+            const message = asString(paramsRecord.message ?? paramsRecord.reason) ?? asString(asRecord(paramsRecord.error)?.message);
+            const additionalDetails = paramsRecord.additional_details
+                ?? paramsRecord.additionalDetails
+                ?? asRecord(paramsRecord.error)?.additional_details
+                ?? asRecord(paramsRecord.error)?.additionalDetails;
+            if (message) {
+                events.push({
+                    type: 'stream_error',
+                    message,
+                    ...(additionalDetails !== undefined ? { additional_details: additionalDetails } : {})
+                });
             }
             return events;
         }
@@ -322,26 +479,16 @@ export class AppServerEventConverter {
             const itemId = extractItemId(paramsRecord);
             const delta = asString(paramsRecord.delta ?? paramsRecord.text ?? paramsRecord.message);
             if (itemId && delta) {
-                const lastDelta = this.lastAgentMessageDeltaByItemId.get(itemId);
-                if (lastDelta === delta) {
-                    return events;
-                }
-                this.lastAgentMessageDeltaByItemId.set(itemId, delta);
                 const prev = this.agentMessageBuffers.get(itemId) ?? '';
                 this.agentMessageBuffers.set(itemId, prev + delta);
             }
             return events;
         }
 
-        if (method === 'item/reasoning/textDelta' || method === 'item/reasoning/summaryTextDelta') {
+        if (method === 'item/reasoning/textDelta') {
             const itemId = extractItemId(paramsRecord) ?? 'reasoning';
             const delta = asString(paramsRecord.delta ?? paramsRecord.text ?? paramsRecord.message);
             if (delta) {
-                const lastDelta = this.lastReasoningDeltaByItemId.get(itemId);
-                if (lastDelta === delta) {
-                    return events;
-                }
-                this.lastReasoningDeltaByItemId.set(itemId, delta);
                 const prev = this.reasoningBuffers.get(itemId) ?? '';
                 this.reasoningBuffers.set(itemId, prev + delta);
                 events.push({ type: 'agent_reasoning_delta', delta });
@@ -350,15 +497,6 @@ export class AppServerEventConverter {
         }
 
         if (method === 'item/reasoning/summaryPartAdded') {
-            const itemId = extractItemId(paramsRecord) ?? 'reasoning';
-            const summaryIndex = asNumber(paramsRecord.summaryIndex ?? paramsRecord.summary_index);
-            if (summaryIndex !== null) {
-                const key = `${itemId}:${summaryIndex}`;
-                if (this.reasoningSectionBreakKeys.has(key)) {
-                    return events;
-                }
-                this.reasoningSectionBreakKeys.add(key);
-            }
             events.push({ type: 'agent_reasoning_section_break' });
             return events;
         }
@@ -367,11 +505,6 @@ export class AppServerEventConverter {
             const itemId = extractItemId(paramsRecord);
             const delta = asString(paramsRecord.delta ?? paramsRecord.text ?? paramsRecord.output ?? paramsRecord.stdout);
             if (itemId && delta) {
-                const lastDelta = this.lastCommandOutputDeltaByItemId.get(itemId);
-                if (lastDelta === delta) {
-                    return events;
-                }
-                this.lastCommandOutputDeltaByItemId.set(itemId, delta);
                 const prev = this.commandOutputBuffers.get(itemId) ?? '';
                 this.commandOutputBuffers.set(itemId, prev + delta);
             }
@@ -391,32 +524,22 @@ export class AppServerEventConverter {
 
             if (itemType === 'agentmessage') {
                 if (method === 'item/completed') {
-                    if (this.completedAgentMessageItems.has(itemId)) {
-                        return events;
-                    }
-                    const text = extractItemText(item) ?? this.agentMessageBuffers.get(itemId);
+                    const text = asString(item.text ?? item.message ?? item.content) ?? this.agentMessageBuffers.get(itemId);
                     if (text) {
                         events.push({ type: 'agent_message', message: text });
-                        this.completedAgentMessageItems.add(itemId);
-                        this.agentMessageBuffers.delete(itemId);
                     }
-                    this.lastAgentMessageDeltaByItemId.delete(itemId);
+                    this.agentMessageBuffers.delete(itemId);
                 }
                 return events;
             }
 
             if (itemType === 'reasoning') {
                 if (method === 'item/completed') {
-                    if (this.completedReasoningItems.has(itemId)) {
-                        return events;
-                    }
-                    const text = extractReasoningText(item) ?? this.reasoningBuffers.get(itemId);
+                    const text = asString(item.text ?? item.message ?? item.content) ?? this.reasoningBuffers.get(itemId);
                     if (text) {
                         events.push({ type: 'agent_reasoning', text });
-                        this.completedReasoningItems.add(itemId);
-                        this.reasoningBuffers.delete(itemId);
                     }
-                    this.lastReasoningDeltaByItemId.delete(itemId);
+                    this.reasoningBuffers.delete(itemId);
                 }
                 return events;
             }
@@ -460,7 +583,6 @@ export class AppServerEventConverter {
 
                     this.commandMeta.delete(itemId);
                     this.commandOutputBuffers.delete(itemId);
-                    this.lastCommandOutputDeltaByItemId.delete(itemId);
                 }
 
                 return events;
@@ -504,7 +626,7 @@ export class AppServerEventConverter {
             }
         }
 
-        logger.debug('[AppServerEventConverter] Unhandled notification', { method, params });
+        this.logUnhandled(method, params);
         return events;
     }
 
@@ -514,11 +636,5 @@ export class AppServerEventConverter {
         this.commandOutputBuffers.clear();
         this.commandMeta.clear();
         this.fileChangeMeta.clear();
-        this.completedAgentMessageItems.clear();
-        this.completedReasoningItems.clear();
-        this.reasoningSectionBreakKeys.clear();
-        this.lastAgentMessageDeltaByItemId.clear();
-        this.lastReasoningDeltaByItemId.clear();
-        this.lastCommandOutputDeltaByItemId.clear();
     }
 }

@@ -318,7 +318,7 @@ function SessionItem(props: {
     const [archiveOpen, setArchiveOpen] = useState(false)
     const [deleteOpen, setDeleteOpen] = useState(false)
 
-    const { archiveSession, renameSession, deleteSession, isPending } = useSessionActions(
+    const { archiveSession, recoverSession, renameSession, deleteSession, isPending } = useSessionActions(
         api,
         s.id,
         s.metadata?.flavor ?? null
@@ -411,6 +411,9 @@ function SessionItem(props: {
                 isOpen={menuOpen}
                 onClose={() => setMenuOpen(false)}
                 sessionActive={s.active}
+                onRecover={() => {
+                    void recoverSession()
+                }}
                 onRename={() => setRenameOpen(true)}
                 onArchive={() => setArchiveOpen(true)}
                 onDelete={() => setDeleteOpen(true)}

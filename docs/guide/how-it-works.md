@@ -63,6 +63,16 @@ hapi opencode     # Start OpenCode session
 hapi runner start # Run background service for remote session spawning
 ```
 
+**Codex remote transport selection (advanced):**
+
+- Default: `codex app-server`
+- Set `CODEX_USE_MCP_SERVER=1` to use MCP transport
+- Set `CODEX_USE_SDK=1` to use SDK transport (highest priority)
+
+Remote Codex slash behavior:
+- Built-in interactive slash commands are not guaranteed in remote mode.
+- User prompt shortcuts from `~/.codex/prompts` can still be suggested.
+
 ### HAPI Hub
 
 The hub is the central service that connects everything:

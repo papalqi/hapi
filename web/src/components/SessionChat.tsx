@@ -45,11 +45,13 @@ export function SessionChat(props: {
     const blocksByIdRef = useRef<Map<string, ChatBlock>>(new Map())
     const [forceScrollToken, setForceScrollToken] = useState(0)
     const agentFlavor = props.session.metadata?.flavor ?? null
-    const { abortSession, switchSession, setPermissionMode, setModelMode } = useSessionActions(
+    const { abortSession, recoverSession, switchSession, setPermissionMode, setModelMode } = useSessionActions(
         props.api,
         props.session.id,
         agentFlavor
     )
+    const [thinkingSince, setThinkingSince] = useState<number | null>(props.session.thinking ? Date.now() : null)
+    const [watchdogNow, setWatchdogNow] = useState(Date.now())
 
     // Voice assistant integration
     const voice = useVoiceOptional()
@@ -179,6 +181,22 @@ export function SessionChat(props: {
         return normalized
     }, [props.messages])
 
+    useEffect(() => {
+        if (!props.session.thinking) {
+            setThinkingSince(null)
+            return
+        }
+        setThinkingSince((prev) => prev ?? Date.now())
+    }, [props.session.thinking])
+
+    useEffect(() => {
+        if (!props.session.thinking) return
+        const timer = window.setInterval(() => {
+            setWatchdogNow(Date.now())
+        }, 5_000)
+        return () => window.clearInterval(timer)
+    }, [props.session.thinking])
+
     const reduced = useMemo(
         () => reduceChatBlocks(normalizedMessages, props.session.agentState),
         [normalizedMessages, props.session.agentState]
@@ -228,6 +246,17 @@ export function SessionChat(props: {
         props.onRefresh()
     }, [switchSession, props.onRefresh])
 
+    const handleRecover = useCallback(async () => {
+        try {
+            await recoverSession()
+            haptic.notification('success')
+            props.onRefresh()
+        } catch (e) {
+            haptic.notification('error')
+            console.error('Failed to recover session:', e)
+        }
+    }, [recoverSession, props.onRefresh, haptic])
+
     const handleViewFiles = useCallback(() => {
         navigate({
             to: '/sessions/$sessionId/files',
@@ -254,6 +283,18 @@ export function SessionChat(props: {
         return createAttachmentAdapter(props.api, props.session.id)
     }, [props.api, props.session.id, props.session.active])
 
+    const hasRecentSystemError = useMemo(() => {
+        return normalizedMessages.slice(-12).some((message) => {
+            if (message.role !== 'event') return false
+            if (message.content.type !== 'message') return false
+            const text = typeof message.content.message === 'string' ? message.content.message : ''
+            return /error|failed|stuck|系统错误|卡住/i.test(text)
+        })
+    }, [normalizedMessages])
+
+    const isLongRunning = thinkingSince !== null && (watchdogNow - thinkingSince) >= 90_000
+    const showRecoverBanner = props.session.active && (hasRecentSystemError || isLongRunning)
+
     const runtime = useHappyRuntime({
         session: props.session,
         blocks: reconciled.blocks,
@@ -278,6 +319,23 @@ export function SessionChat(props: {
                 <div className="px-3 pt-3">
                     <div className="mx-auto w-full max-w-content rounded-md bg-[var(--app-subtle-bg)] p-3 text-sm text-[var(--app-hint)]">
                         Session is inactive. Sending will resume it automatically.
+                    </div>
+                </div>
+            ) : null}
+
+            {showRecoverBanner ? (
+                <div className="px-3 pt-3">
+                    <div className="mx-auto flex w-full max-w-content items-center justify-between gap-3 rounded-md border border-[var(--app-border)] bg-[var(--app-subtle-bg)] p-3 text-sm">
+                        <span className="text-[var(--app-hint)]">
+                            Session may be stuck. You can recover this session without losing context.
+                        </span>
+                        <button
+                            type="button"
+                            onClick={handleRecover}
+                            className="rounded-md border border-[var(--app-border)] px-3 py-1.5 text-xs font-medium text-[var(--app-fg)] transition-colors hover:bg-[var(--app-secondary-bg)]"
+                        >
+                            Recover session
+                        </button>
                     </div>
                 </div>
             ) : null}

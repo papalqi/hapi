@@ -79,7 +79,7 @@ export function SessionHeader(props: {
     const [archiveOpen, setArchiveOpen] = useState(false)
     const [deleteOpen, setDeleteOpen] = useState(false)
 
-    const { archiveSession, renameSession, deleteSession, isPending } = useSessionActions(
+    const { archiveSession, recoverSession, renameSession, deleteSession, isPending } = useSessionActions(
         api,
         session.id,
         session.metadata?.flavor ?? null
@@ -88,6 +88,12 @@ export function SessionHeader(props: {
     const handleDelete = async () => {
         await deleteSession()
         onSessionDeleted?.()
+    }
+
+    const handleRecover = () => {
+        void recoverSession().catch((error) => {
+            console.error('Failed to recover session:', error)
+        })
     }
 
     const handleMenuToggle = () => {
@@ -178,6 +184,7 @@ export function SessionHeader(props: {
                 isOpen={menuOpen}
                 onClose={() => setMenuOpen(false)}
                 sessionActive={session.active}
+                onRecover={handleRecover}
                 onRename={() => setRenameOpen(true)}
                 onArchive={() => setArchiveOpen(true)}
                 onDelete={() => setDeleteOpen(true)}

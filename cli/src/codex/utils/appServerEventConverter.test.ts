@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { AppServerEventConverter } from './appServerEventConverter';
+import { logger } from '@/ui/logger';
 
 describe('AppServerEventConverter', () => {
     it('maps thread/started', () => {
@@ -44,21 +45,6 @@ describe('AppServerEventConverter', () => {
         expect(completed).toEqual([{ type: 'agent_message', message: 'Hello world' }]);
     });
 
-    it('deduplicates repeated agent message completions for the same item', () => {
-        const converter = new AppServerEventConverter();
-
-        converter.handleNotification('item/agentMessage/delta', { itemId: 'msg-1', delta: 'Hello' });
-        const first = converter.handleNotification('item/completed', {
-            item: { id: 'msg-1', type: 'AgentMessage' }
-        });
-        const second = converter.handleNotification('item/completed', {
-            item: { id: 'msg-1', type: 'agentMessage' }
-        });
-
-        expect(first).toEqual([{ type: 'agent_message', message: 'Hello' }]);
-        expect(second).toEqual([]);
-    });
-
     it('maps command execution items and output deltas', () => {
         const converter = new AppServerEventConverter();
 
@@ -92,43 +78,6 @@ describe('AppServerEventConverter', () => {
         expect(events).toEqual([{ type: 'agent_reasoning_delta', delta: 'step' }]);
     });
 
-    it('dedupes duplicate reasoning deltas', () => {
-        const converter = new AppServerEventConverter();
-
-        expect(converter.handleNotification('item/reasoning/textDelta', { itemId: 'r1', delta: 'Hello ' }))
-            .toEqual([{ type: 'agent_reasoning_delta', delta: 'Hello ' }]);
-        expect(converter.handleNotification('item/reasoning/textDelta', { itemId: 'r1', delta: 'Hello ' }))
-            .toEqual([]);
-        converter.handleNotification('item/reasoning/textDelta', { itemId: 'r1', delta: 'world' });
-
-        const completed = converter.handleNotification('item/completed', {
-            item: { id: 'r1', type: 'reasoning' }
-        });
-
-        expect(completed).toEqual([{ type: 'agent_reasoning', text: 'Hello world' }]);
-    });
-
-    it('maps reasoning summary deltas', () => {
-        const converter = new AppServerEventConverter();
-
-        const events = converter.handleNotification('item/reasoning/summaryTextDelta', { itemId: 'r1', delta: 'step' });
-        expect(events).toEqual([{ type: 'agent_reasoning_delta', delta: 'step' }]);
-    });
-
-    it('deduplicates repeated reasoning completions for the same item', () => {
-        const converter = new AppServerEventConverter();
-
-        const first = converter.handleNotification('item/completed', {
-            item: { id: 'r1', type: 'Reasoning', summary_text: ['Plan'] }
-        });
-        const second = converter.handleNotification('item/completed', {
-            item: { id: 'r1', type: 'reasoning', summary_text: ['Plan'] }
-        });
-
-        expect(first).toEqual([{ type: 'agent_reasoning', text: 'Plan' }]);
-        expect(second).toEqual([]);
-    });
-
     it('maps diff updates', () => {
         const converter = new AppServerEventConverter();
 
@@ -136,128 +85,124 @@ describe('AppServerEventConverter', () => {
         expect(events).toEqual([{ type: 'turn_diff', unified_diff: 'diff --git a b' }]);
     });
 
-    it('unwraps codex/event task lifecycle', () => {
+    it('unwraps codex/event/agent_message notifications', () => {
         const converter = new AppServerEventConverter();
 
-        const started = converter.handleNotification('codex/event/task_started', {
-            msg: { type: 'task_started', turn_id: 'turn-1' }
+        const events = converter.handleNotification('codex/event/agent_message', {
+            msg: { type: 'agent_message', message: 'hello from wrapper' }
         });
-        expect(started).toEqual([{ type: 'task_started', turn_id: 'turn-1' }]);
 
-        const completed = converter.handleNotification('codex/event/task_complete', {
-            msg: { type: 'task_complete', turn_id: 'turn-1' }
-        });
-        expect(completed).toEqual([{ type: 'task_complete', turn_id: 'turn-1' }]);
+        expect(events).toEqual([{ type: 'agent_message', message: 'hello from wrapper' }]);
     });
 
-    it('ignores wrapped terminal lifecycle events without turn_id', () => {
+    it('unwraps codex/event/task/started notifications', () => {
         const converter = new AppServerEventConverter();
 
-        const completed = converter.handleNotification('codex/event/task_complete', {
-            msg: { type: 'task_complete' }
+        const events = converter.handleNotification('codex/event/task/started', {
+            msg: { turn_id: 'turn-42' }
         });
 
-        expect(completed).toEqual([]);
+        expect(events).toEqual([{ type: 'task_started', turn_id: 'turn-42' }]);
     });
 
-    it('unwraps codex/event agent deltas and item completion', () => {
+    it('unwraps codex/event/error and codex/event/stream_error notifications', () => {
         const converter = new AppServerEventConverter();
 
-        converter.handleNotification('codex/event/agent_message_delta', {
-            msg: { type: 'agent_message_delta', item_id: 'msg-1', delta: 'Hello' }
-        });
-        converter.handleNotification('codex/event/agent_message_content_delta', {
-            msg: { type: 'agent_message_content_delta', item_id: 'msg-1', delta: ' world' }
-        });
-
-        const completed = converter.handleNotification('codex/event/item_completed', {
+        const errorEvents = converter.handleNotification('codex/event/error', {
             msg: {
-                type: 'item_completed',
-                item_id: 'msg-1',
-                item: { id: 'msg-1', type: 'AgentMessage' }
+                type: 'error',
+                message: 'fatal',
+                additional_details: { code: 'E_FATAL' }
+            }
+        });
+        expect(errorEvents).toEqual([{
+            type: 'error',
+            message: 'fatal',
+            additional_details: { code: 'E_FATAL' }
+        }]);
+
+        const streamEvents = converter.handleNotification('codex/event/stream_error', {
+            msg: {
+                type: 'stream_error',
+                message: 'stream broke',
+                additional_details: { phase: 'decode' }
+            }
+        });
+        expect(streamEvents).toEqual([{
+            type: 'stream_error',
+            message: 'stream broke',
+            additional_details: { phase: 'decode' }
+        }]);
+    });
+
+    it('maps thread/status/changed systemError to visible error events', () => {
+        const converter = new AppServerEventConverter();
+
+        const events = converter.handleNotification('thread/status/changed', {
+            thread: { id: 'thread-5' },
+            turn: { id: 'turn-5' },
+            status: {
+                type: 'systemError',
+                systemError: {
+                    message: 'backend unavailable',
+                    additional_details: { traceId: 'trace-1' }
+                }
             }
         });
 
-        expect(completed).toEqual([{ type: 'agent_message', message: 'Hello world' }]);
+        expect(events).toEqual([{
+            type: 'error',
+            message: 'backend unavailable',
+            thread_id: 'thread-5',
+            turn_id: 'turn-5',
+            additional_details: { traceId: 'trace-1' }
+        }]);
     });
 
-    it('unwraps codex/event reasoning completion from summary text', () => {
+    it('unwraps codex/event/thread/status/changed systemError notifications', () => {
         const converter = new AppServerEventConverter();
 
-        converter.handleNotification('codex/event/reasoning_content_delta', {
-            msg: { type: 'reasoning_content_delta', item_id: 'r1', delta: 'Plan' }
-        });
-        const completed = converter.handleNotification('codex/event/item_completed', {
+        const events = converter.handleNotification('codex/event/thread/status/changed', {
             msg: {
-                type: 'item_completed',
-                item_id: 'r1',
-                item: { id: 'r1', type: 'Reasoning', summary_text: ['Plan done'] }
+                thread: { id: 'thread-6' },
+                status: {
+                    type: 'systemError',
+                    systemError: { message: 'wrapped system error', additional_details: { traceId: 'trace-wrapped' } }
+                }
             }
         });
 
-        expect(completed).toEqual([{ type: 'agent_reasoning', text: 'Plan done' }]);
+        expect(events).toEqual([{
+            type: 'error',
+            message: 'wrapped system error',
+            thread_id: 'thread-6',
+            additional_details: { traceId: 'trace-wrapped' }
+        }]);
     });
 
-    it('prefers canonical reasoning stream over wrapped agent_reasoning events', () => {
+    it('throttles unhandled notification logs per method', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+        const debugSpy = vi.spyOn(logger, 'debug').mockImplementation(() => {});
         const converter = new AppServerEventConverter();
 
-        const section = converter.handleNotification('codex/event/agent_reasoning_section_break', {
-            msg: { type: 'agent_reasoning_section_break', item_id: 'r1' }
-        });
-        const delta = converter.handleNotification('codex/event/agent_reasoning_delta', {
-            msg: { type: 'agent_reasoning_delta', item_id: 'r1', delta: 'step' }
-        });
-        const reasoning = converter.handleNotification('codex/event/agent_reasoning', {
-            msg: { type: 'agent_reasoning', item_id: 'r1', text: 'Plan' }
-        });
+        try {
+            converter.handleNotification('unknown/method', { attempt: 1 });
+            converter.handleNotification('unknown/method', { attempt: 2 });
+            converter.handleNotification('unknown/method', { attempt: 3 });
+            expect(debugSpy).toHaveBeenCalledTimes(1);
 
-        expect(section).toEqual([{ type: 'agent_reasoning_section_break' }]);
-        expect(delta).toEqual([]);
-        expect(reasoning).toEqual([]);
-    });
-
-    it('deduplicates section break when wrapped and direct summary part events share the same index', () => {
-        const converter = new AppServerEventConverter();
-
-        const wrapped = converter.handleNotification('codex/event/agent_reasoning_section_break', {
-            msg: { type: 'agent_reasoning_section_break', item_id: 'r1', summary_index: 0 }
-        });
-        const direct = converter.handleNotification('item/reasoning/summaryPartAdded', {
-            itemId: 'r1',
-            summaryIndex: 0
-        });
-
-        expect(wrapped).toEqual([{ type: 'agent_reasoning_section_break' }]);
-        expect(direct).toEqual([]);
-    });
-
-    it('ignores wrapped final agent message and relies on item completion', () => {
-        const converter = new AppServerEventConverter();
-
-        const wrapped = converter.handleNotification('codex/event/agent_message', {
-            msg: { type: 'agent_message', item_id: 'msg-1', message: 'Hello' }
-        });
-
-        expect(wrapped).toEqual([]);
-    });
-
-    it('ignores wrapped retryable errors', () => {
-        const converter = new AppServerEventConverter();
-
-        const events = converter.handleNotification('codex/event/error', {
-            msg: { type: 'error', message: 'temporary', will_retry: true }
-        });
-
-        expect(events).toEqual([]);
-    });
-
-    it('maps wrapped non-retryable errors to task_failed', () => {
-        const converter = new AppServerEventConverter();
-
-        const events = converter.handleNotification('codex/event/error', {
-            msg: { type: 'error', message: 'fatal' }
-        });
-
-        expect(events).toEqual([{ type: 'task_failed', error: 'fatal' }]);
+            vi.advanceTimersByTime(31_000);
+            converter.handleNotification('unknown/method', { attempt: 4 });
+            expect(debugSpy).toHaveBeenCalledTimes(2);
+            expect(debugSpy.mock.calls[1]?.[0]).toContain('throttled');
+            expect(debugSpy.mock.calls[1]?.[1]).toMatchObject({
+                method: 'unknown/method',
+                suppressed: 2
+            });
+        } finally {
+            debugSpy.mockRestore();
+            vi.useRealTimers();
+        }
     });
 });

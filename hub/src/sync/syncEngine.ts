@@ -325,7 +325,11 @@ export class SyncEngine {
         )
     }
 
-    async resumeSession(sessionId: string, namespace: string): Promise<ResumeSessionResult> {
+    async resumeSession(
+        sessionId: string,
+        namespace: string,
+        options?: { forceRestart?: boolean }
+    ): Promise<ResumeSessionResult> {
         const access = this.sessionCache.resolveSessionAccess(sessionId, namespace)
         if (!access.ok) {
             return {
@@ -337,7 +341,19 @@ export class SyncEngine {
 
         const session = access.session
         if (session.active) {
-            return { type: 'success', sessionId: access.sessionId }
+            if (!options?.forceRestart) {
+                return { type: 'success', sessionId: access.sessionId }
+            }
+            try {
+                await this.rpcGateway.killSession(access.sessionId)
+            } catch (error) {
+                return {
+                    type: 'error',
+                    message: error instanceof Error ? error.message : 'Failed to stop active session before recovery',
+                    code: 'resume_failed'
+                }
+            }
+            this.handleSessionEnd({ sid: access.sessionId, time: Date.now() })
         }
 
         const metadata = session.metadata
@@ -411,6 +427,10 @@ export class SyncEngine {
         }
 
         return { type: 'success', sessionId: spawnResult.sessionId }
+    }
+
+    async recoverSession(sessionId: string, namespace: string): Promise<ResumeSessionResult> {
+        return await this.resumeSession(sessionId, namespace, { forceRestart: true })
     }
 
     async waitForSessionActive(sessionId: string, timeoutMs: number = 15_000): Promise<boolean> {

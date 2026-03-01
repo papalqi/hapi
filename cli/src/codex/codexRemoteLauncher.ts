@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 
 import { CodexMcpClient } from './codexMcpClient';
 import { CodexAppServerClient } from './codexAppServerClient';
+import { CodexSdkClient } from './codexSdkClient';
 import { CodexPermissionHandler } from './utils/permissionHandler';
 import { ReasoningProcessor } from './utils/reasoningProcessor';
 import { DiffProcessor } from './utils/diffProcessor';
@@ -18,7 +19,7 @@ import { buildCodexStartConfig } from './utils/codexStartConfig';
 import { AppServerEventConverter } from './utils/appServerEventConverter';
 import { registerAppServerPermissionHandlers } from './utils/appServerPermissionAdapter';
 import { buildThreadStartParams, buildTurnStartParams } from './utils/appServerConfig';
-import { shouldIgnoreTerminalEvent } from './utils/terminalEventGuard';
+import { buildCodexSdkOptions, buildCodexSdkThreadOptions } from './utils/codexSdkConfig';
 import {
     RemoteLauncherBase,
     type RemoteLauncherDisplayContext,
@@ -27,16 +28,26 @@ import {
 
 type HappyServer = Awaited<ReturnType<typeof buildHapiMcpBridge>>['server'];
 
-function shouldUseAppServer(): boolean {
-    const useMcpServer = process.env.CODEX_USE_MCP_SERVER === '1';
-    return !useMcpServer;
+type CodexRemoteTransport = 'app-server' | 'mcp' | 'sdk';
+
+function resolveTransport(): CodexRemoteTransport {
+    if (process.env.CODEX_USE_SDK === '1') {
+        return 'sdk';
+    }
+    if (process.env.CODEX_USE_MCP_SERVER === '1') {
+        return 'mcp';
+    }
+    return 'app-server';
 }
 
 class CodexRemoteLauncher extends RemoteLauncherBase {
     private readonly session: CodexSession;
+    private readonly transport: CodexRemoteTransport;
     private readonly useAppServer: boolean;
+    private readonly useSdk: boolean;
     private readonly mcpClient: CodexMcpClient | null;
     private readonly appServerClient: CodexAppServerClient | null;
+    private readonly sdkClient: CodexSdkClient | null;
     private permissionHandler: CodexPermissionHandler | null = null;
     private reasoningProcessor: ReasoningProcessor | null = null;
     private diffProcessor: DiffProcessor | null = null;
@@ -48,9 +59,12 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
     constructor(session: CodexSession) {
         super(process.env.DEBUG ? session.logPath : undefined);
         this.session = session;
-        this.useAppServer = shouldUseAppServer();
-        this.mcpClient = this.useAppServer ? null : new CodexMcpClient();
-        this.appServerClient = this.useAppServer ? new CodexAppServerClient() : null;
+        this.transport = resolveTransport();
+        this.useAppServer = this.transport === 'app-server';
+        this.useSdk = this.transport === 'sdk';
+        this.mcpClient = this.transport === 'mcp' ? new CodexMcpClient() : null;
+        this.appServerClient = this.transport === 'app-server' ? new CodexAppServerClient() : null;
+        this.sdkClient = this.transport === 'sdk' ? new CodexSdkClient() : null;
     }
 
     protected createDisplay(context: RemoteLauncherDisplayContext): React.ReactElement {
@@ -69,6 +83,18 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
                         });
                     } catch (error) {
                         logger.debug('[Codex] Error interrupting app-server turn:', error);
+                    }
+                }
+
+                this.currentTurnId = null;
+            }
+
+            if (this.useSdk && this.sdkClient) {
+                if (this.currentTurnId) {
+                    try {
+                        await this.sdkClient.interruptTurn();
+                    } catch (error) {
+                        logger.debug('[Codex] Error interrupting SDK turn:', error);
                     }
                 }
 
@@ -129,8 +155,11 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
         const session = this.session;
         const messageBuffer = this.messageBuffer;
         const useAppServer = this.useAppServer;
+        const useSdk = this.useSdk;
+        const useAsyncTurnClient = useAppServer || useSdk;
         const mcpClient = this.mcpClient;
         const appServerClient = this.appServerClient;
+        const sdkClient = this.sdkClient;
         const appServerEventConverter = useAppServer ? new AppServerEventConverter() : null;
 
         const normalizeCommand = (value: unknown): string | undefined => {
@@ -156,15 +185,6 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
             return typeof value === 'string' && value.length > 0 ? value : null;
         };
 
-        const buildMcpToolName = (server: unknown, tool: unknown): string | null => {
-            const serverName = asString(server);
-            const toolName = asString(tool);
-            if (!serverName || !toolName) {
-                return null;
-            }
-            return `mcp__${serverName}__${toolName}`;
-        };
-
         const formatOutputPreview = (value: unknown): string => {
             if (typeof value === 'string') return value;
             if (typeof value === 'number' || typeof value === 'boolean') return String(value);
@@ -174,6 +194,73 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
             } catch {
                 return String(value);
             }
+        };
+
+        const normalizeChanges = (value: unknown): Record<string, unknown> => {
+            const record = asRecord(value);
+            if (record) {
+                return record;
+            }
+
+            if (!Array.isArray(value)) {
+                return {};
+            }
+
+            const normalized: Record<string, unknown> = {};
+            for (const entry of value) {
+                const entryRecord = asRecord(entry);
+                if (!entryRecord) continue;
+                const path = asString(entryRecord.path ?? entryRecord.file ?? entryRecord.filePath ?? entryRecord.file_path);
+                if (!path) continue;
+                normalized[path] = entryRecord;
+            }
+
+            return normalized;
+        };
+
+        const normalizeTodoEntries = (value: unknown): Array<{
+            content: string;
+            priority: 'high' | 'medium' | 'low';
+            status: 'pending' | 'in_progress' | 'completed';
+        }> => {
+            if (!Array.isArray(value)) return [];
+            const entries: Array<{
+                content: string;
+                priority: 'high' | 'medium' | 'low';
+                status: 'pending' | 'in_progress' | 'completed';
+            }> = [];
+
+            for (const item of value) {
+                const record = asRecord(item);
+                if (!record) continue;
+                const content = asString(record.text ?? record.content);
+                if (!content) continue;
+
+                const rawStatus = asString(record.status);
+                const completed = record.completed === true;
+                const status: 'pending' | 'in_progress' | 'completed' =
+                    completed
+                        ? 'completed'
+                        : rawStatus === 'in_progress' || rawStatus === 'in-progress'
+                            ? 'in_progress'
+                            : rawStatus === 'completed'
+                                ? 'completed'
+                                : 'pending';
+
+                const rawPriority = asString(record.priority);
+                const priority: 'high' | 'medium' | 'low' =
+                    rawPriority === 'high' || rawPriority === 'low' || rawPriority === 'medium'
+                        ? rawPriority
+                        : 'medium';
+
+                entries.push({
+                    content,
+                    priority,
+                    status
+                });
+            }
+
+            return entries;
         };
 
         const shouldForceSessionReset = (rawMessage: string): boolean => {
@@ -236,17 +323,111 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
         this.permissionHandler = permissionHandler;
         this.reasoningProcessor = reasoningProcessor;
         this.diffProcessor = diffProcessor;
-        let readyAfterTurnTimer: ReturnType<typeof setTimeout> | null = null;
-        let scheduleReadyAfterTurn: (() => void) | null = null;
-        let clearReadyAfterTurnTimer: (() => void) | null = null;
+
+        let wasCreated = false;
+        let currentModeHash: string | null = null;
+        let pending: { message: string; mode: EnhancedMode; isolate: boolean; hash: string } | null = null;
+        let first = true;
         let turnInFlight = false;
-        let allowAnonymousTerminalEvent = false;
+
+        const TURN_WATCHDOG_PROGRESS_TIMEOUT_MS = 90_000;
+        const TURN_WATCHDOG_CHECK_INTERVAL_MS = 5_000;
+        let turnWatchdogTimer: NodeJS.Timeout | null = null;
+        let lastTurnProgressAt = 0;
+        let turnWatchdogNotified = false;
+
+        const sendReady = () => {
+            session.sendSessionEvent({ type: 'ready' });
+        };
+
+        const syncSessionId = () => {
+            if (!mcpClient) return;
+            const clientSessionId = mcpClient.getSessionId();
+            if (clientSessionId && clientSessionId !== session.sessionId) {
+                session.onSessionFound(clientSessionId);
+            }
+        };
+
+        const formatAdditionalDetails = (value: unknown): string | null => {
+            if (value === null || value === undefined) return null;
+            const preview = formatOutputPreview(value).trim();
+            if (preview.length === 0) return null;
+            if (preview.length <= 600) return preview;
+            return `${preview.slice(0, 600)}...`;
+        };
+
+        const markTurnProgress = () => {
+            if (!useAsyncTurnClient || !turnInFlight) return;
+            lastTurnProgressAt = Date.now();
+        };
+
+        const clearTurnWatchdog = () => {
+            if (turnWatchdogTimer) {
+                clearInterval(turnWatchdogTimer);
+                turnWatchdogTimer = null;
+            }
+            lastTurnProgressAt = 0;
+            turnWatchdogNotified = false;
+        };
+
+        const startTurnTracking = () => {
+            if (!useAsyncTurnClient) return;
+            turnInFlight = true;
+            lastTurnProgressAt = Date.now();
+            turnWatchdogNotified = false;
+            if (!session.thinking) {
+                logger.debug('thinking started');
+                session.onThinkingChange(true);
+            }
+            if (!turnWatchdogTimer) {
+                turnWatchdogTimer = setInterval(() => {
+                    if (this.shouldExit || !turnInFlight) {
+                        return;
+                    }
+                    const idleForMs = Date.now() - lastTurnProgressAt;
+                    if (turnWatchdogNotified || idleForMs < TURN_WATCHDOG_PROGRESS_TIMEOUT_MS) {
+                        return;
+                    }
+                    turnWatchdogNotified = true;
+                    const warning = 'Codex might be stuck (no visible progress for 90s). Try Abort, Recover Session, or reconnect.';
+                    messageBuffer.addMessage(warning, 'status');
+                    session.sendSessionEvent({ type: 'message', message: warning });
+                }, TURN_WATCHDOG_CHECK_INTERVAL_MS);
+                turnWatchdogTimer.unref?.();
+            }
+        };
+
+        const clearTurnTracking = (reason: string) => {
+            if (useAsyncTurnClient) {
+                turnInFlight = false;
+                clearTurnWatchdog();
+            }
+            this.currentTurnId = null;
+            if (session.thinking) {
+                logger.debug(`thinking completed (${reason})`);
+                session.onThinkingChange(false);
+            }
+            permissionHandler.reset();
+            reasoningProcessor.abort();
+            diffProcessor.reset();
+            appServerEventConverter?.reset();
+        };
+
+        const shouldTreatAsTerminalEvent = (msgType: string, msg: Record<string, unknown>): boolean => {
+            if (msgType === 'task_complete' || msgType === 'turn_aborted' || msgType === 'task_failed') {
+                return true;
+            }
+            if (msgType === 'error' || msgType === 'stream_error') {
+                return (msg.will_retry === true || msg.willRetry === true) ? false : true;
+            }
+            return false;
+        };
 
         const handleCodexEvent = (msg: Record<string, unknown>) => {
             const msgType = asString(msg.type);
             if (!msgType) return;
-            const eventTurnId = asString(msg.turn_id ?? msg.turnId);
-            const isTerminalEvent = msgType === 'task_complete' || msgType === 'turn_aborted' || msgType === 'task_failed';
+
+            const isTerminalEvent = shouldTreatAsTerminalEvent(msgType, msg);
 
             if (msgType === 'thread_started') {
                 const threadId = asString(msg.thread_id ?? msg.threadId);
@@ -258,35 +439,23 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
             }
 
             if (msgType === 'task_started') {
-                const turnId = eventTurnId;
+                const turnId = asString(msg.turn_id ?? msg.turnId);
                 if (turnId) {
                     this.currentTurnId = turnId;
-                    allowAnonymousTerminalEvent = false;
-                } else if (useAppServer && !this.currentTurnId) {
-                    allowAnonymousTerminalEvent = true;
+                }
+                if (useAsyncTurnClient) {
+                    startTurnTracking();
+                } else if (!session.thinking) {
+                    logger.debug('thinking started');
+                    session.onThinkingChange(true);
                 }
             }
 
             if (isTerminalEvent) {
-                if (shouldIgnoreTerminalEvent({
-                    useAppServer,
-                    eventTurnId,
-                    currentTurnId: this.currentTurnId,
-                    turnInFlight,
-                    allowAnonymousTerminalEvent
-                })) {
-                    logger.debug(
-                        `[Codex] Ignoring terminal event ${msgType} without matching turn context; ` +
-                        `eventTurnId=${eventTurnId ?? 'none'}, activeTurn=${this.currentTurnId ?? 'none'}, ` +
-                        `turnInFlight=${turnInFlight}, allowAnonymous=${allowAnonymousTerminalEvent}`
-                    );
-                    return;
-                }
                 this.currentTurnId = null;
-                allowAnonymousTerminalEvent = false;
             }
 
-            if (!useAppServer) {
+            if (!useAppServer && !useSdk) {
                 logger.debug(`[Codex] MCP message: ${JSON.stringify(msg)}`);
 
                 if (msgType === 'event_msg' || msgType === 'response_item' || msgType === 'session_meta') {
@@ -294,6 +463,10 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
                     const payloadType = asString(payload?.type);
                     logger.debug(`[Codex] MCP wrapper event type: ${msgType}${payloadType ? ` (payload=${payloadType})` : ''}`);
                 }
+            }
+
+            if (useAsyncTurnClient && turnInFlight) {
+                markTurnProgress();
             }
 
             if (msgType === 'agent_message') {
@@ -321,80 +494,57 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
                 messageBuffer.addMessage('Starting task...', 'status');
             } else if (msgType === 'task_complete') {
                 messageBuffer.addMessage('Task completed', 'status');
-                if (!useAppServer) {
-                    sendReady();
-                }
             } else if (msgType === 'turn_aborted') {
                 messageBuffer.addMessage('Turn aborted', 'status');
-                if (!useAppServer) {
-                    sendReady();
-                }
             } else if (msgType === 'task_failed') {
                 const error = asString(msg.error);
                 messageBuffer.addMessage(error ? `Task failed: ${error}` : 'Task failed', 'status');
-                if (!useAppServer) {
-                    sendReady();
-                }
             } else if (msgType === 'stream_error') {
                 const message = asString(msg.message) ?? 'Stream error';
+                const additionalDetails = msg.additional_details ?? msg.additionalDetails;
+                const detailsText = formatAdditionalDetails(additionalDetails);
                 messageBuffer.addMessage(`Error: ${message}`, 'status');
-                session.sendSessionEvent({ type: 'message', message: `Stream error: ${message}` });
+                session.sendSessionEvent({
+                    type: 'message',
+                    message: detailsText
+                        ? `Stream error: ${message}\nDetails: ${detailsText}`
+                        : `Stream error: ${message}`
+                });
                 if (shouldForceSessionReset(message)) {
                     wasCreated = false;
                     currentModeHash = null;
                     mcpClient?.clearSession();
+                    sdkClient?.clearThread();
                     logger.debug('[Codex] Forced session reset after stream error (session invalid)');
                 } else {
                     logger.debug('[Codex] Keeping session state after stream error to preserve context');
                 }
             } else if (msgType === 'error') {
                 const message = asString(msg.message) ?? 'Unknown error';
+                const additionalDetails = msg.additional_details ?? msg.additionalDetails;
+                const detailsText = formatAdditionalDetails(additionalDetails);
                 messageBuffer.addMessage(`Error: ${message}`, 'status');
-                session.sendSessionEvent({ type: 'message', message: `Codex error: ${message}` });
+                session.sendSessionEvent({
+                    type: 'message',
+                    message: detailsText
+                        ? `Codex error: ${message}\nDetails: ${detailsText}`
+                        : `Codex error: ${message}`
+                });
                 if (shouldForceSessionReset(message)) {
                     wasCreated = false;
                     currentModeHash = null;
                     mcpClient?.clearSession();
+                    sdkClient?.clearThread();
                     logger.debug('[Codex] Forced session reset after API error (session invalid)');
                 } else {
                     logger.debug('[Codex] Keeping session state after API error to preserve context');
                 }
             }
 
-            if (msgType === 'task_started') {
-                clearReadyAfterTurnTimer?.();
-                if (useAppServer) {
-                    turnInFlight = true;
-                    if (!eventTurnId && !this.currentTurnId) {
-                        allowAnonymousTerminalEvent = true;
-                    }
-                }
-                if (!session.thinking) {
-                    logger.debug('thinking started');
-                    session.onThinkingChange(true);
-                }
-            }
             if (isTerminalEvent) {
-                if (useAppServer) {
-                    turnInFlight = false;
-                    allowAnonymousTerminalEvent = false;
-                }
-                if (session.thinking) {
-                    logger.debug('thinking completed');
-                    session.onThinkingChange(false);
-                }
-                diffProcessor.reset();
-                appServerEventConverter?.reset();
+                clearTurnTracking(msgType);
+                sendReady();
             }
-
-            if (useAppServer) {
-                if (isTerminalEvent && !turnInFlight) {
-                    scheduleReadyAfterTurn?.();
-                } else if (readyAfterTurnTimer && msgType !== 'task_started') {
-                    scheduleReadyAfterTurn?.();
-                }
-            }
-
             if (msgType === 'agent_reasoning_section_break') {
                 reasoningProcessor.handleSectionBreak();
             }
@@ -459,10 +609,19 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
                     id: randomUUID()
                 });
             }
+            if (msgType === 'todo_list') {
+                const entries = normalizeTodoEntries(msg.items);
+                if (entries.length > 0) {
+                    session.sendCodexMessage({
+                        type: 'plan',
+                        entries
+                    });
+                }
+            }
             if (msgType === 'patch_apply_begin') {
                 const callId = asString(msg.call_id ?? msg.callId);
                 if (callId) {
-                    const changes = asRecord(msg.changes) ?? {};
+                    const changes = normalizeChanges(msg.changes);
                     const changeCount = Object.keys(changes).length;
                     const filesMsg = changeCount === 1 ? '1 file' : `${changeCount} files`;
                     messageBuffer.addMessage(`Modifying ${filesMsg}...`, 'tool');
@@ -506,48 +665,6 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
                     });
                 }
             }
-            if (msgType === 'mcp_tool_call_begin') {
-                const callId = asString(msg.call_id ?? msg.callId);
-                const invocation = asRecord(msg.invocation) ?? {};
-                const name = buildMcpToolName(
-                    invocation.server ?? invocation.server_name ?? msg.server,
-                    invocation.tool ?? invocation.tool_name ?? msg.tool
-                );
-                if (callId && name) {
-                    session.sendCodexMessage({
-                        type: 'tool-call',
-                        name,
-                        callId,
-                        input: invocation.arguments ?? invocation.input ?? msg.arguments ?? msg.input ?? {},
-                        id: randomUUID()
-                    });
-                }
-            }
-            if (msgType === 'mcp_tool_call_end') {
-                const callId = asString(msg.call_id ?? msg.callId);
-                const rawResult = msg.result;
-                let output = rawResult;
-                let isError = false;
-                const resultRecord = asRecord(rawResult);
-                if (resultRecord) {
-                    if (Object.prototype.hasOwnProperty.call(resultRecord, 'Ok')) {
-                        output = resultRecord.Ok;
-                    } else if (Object.prototype.hasOwnProperty.call(resultRecord, 'Err')) {
-                        output = resultRecord.Err;
-                        isError = true;
-                    }
-                }
-
-                if (callId) {
-                    session.sendCodexMessage({
-                        type: 'tool-call-result',
-                        callId,
-                        output,
-                        is_error: isError,
-                        id: randomUUID()
-                    });
-                }
-            }
             if (msgType === 'turn_diff') {
                 const diff = asString(msg.unified_diff);
                 if (diff) {
@@ -568,6 +685,11 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
                     const eventRecord = asRecord(event) ?? { type: undefined };
                     handleCodexEvent(eventRecord);
                 }
+            });
+        } else if (useSdk && sdkClient) {
+            sdkClient.setHandler((event) => {
+                const eventRecord = asRecord(event) ?? { type: undefined };
+                handleCodexEvent(eventRecord);
             });
         } else if (mcpClient) {
             mcpClient.setPermissionHandler(permissionHandler);
@@ -597,18 +719,6 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
             } catch {}
         }
 
-        const sendReady = () => {
-            session.sendSessionEvent({ type: 'ready' });
-        };
-
-        const syncSessionId = () => {
-            if (!mcpClient) return;
-            const clientSessionId = mcpClient.getSessionId();
-            if (clientSessionId && clientSessionId !== session.sessionId) {
-                session.onSessionFound(clientSessionId);
-            }
-        };
-
         if (useAppServer && appServerClient) {
             await appServerClient.connect();
             await appServerClient.initialize({
@@ -617,36 +727,11 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
                     version: '1.0.0'
                 }
             });
+        } else if (useSdk && sdkClient) {
+            await sdkClient.connect();
         } else if (mcpClient) {
             await mcpClient.connect();
         }
-
-        let wasCreated = false;
-        let currentModeHash: string | null = null;
-        let pending: { message: string; mode: EnhancedMode; isolate: boolean; hash: string } | null = null;
-        let first = true;
-
-        clearReadyAfterTurnTimer = () => {
-            if (!readyAfterTurnTimer) {
-                return;
-            }
-            clearTimeout(readyAfterTurnTimer);
-            readyAfterTurnTimer = null;
-        };
-
-        scheduleReadyAfterTurn = () => {
-            clearReadyAfterTurnTimer?.();
-            readyAfterTurnTimer = setTimeout(() => {
-                readyAfterTurnTimer = null;
-                emitReadyIfIdle({
-                    pending,
-                    queueSize: () => session.queue.size(),
-                    shouldExit: this.shouldExit,
-                    sendReady
-                });
-            }, 120);
-            readyAfterTurnTimer.unref?.();
-        };
 
         while (!this.shouldExit) {
             logActiveHandles('loop-top');
@@ -675,6 +760,7 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
                 messageBuffer.addMessage('═'.repeat(40), 'status');
                 messageBuffer.addMessage('Starting new Codex session (mode changed)...', 'status');
                 mcpClient?.clearSession();
+                sdkClient?.clearThread();
                 wasCreated = false;
                 currentModeHash = null;
                 pending = message;
@@ -742,8 +828,7 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
                             mode: message.mode,
                             cliOverrides: session.codexCliOverrides
                         });
-                        turnInFlight = true;
-                        allowAnonymousTerminalEvent = false;
+                        startTurnTracking();
                         const turnResponse = await appServerClient.startTurn(turnParams, {
                             signal: this.abortController.signal
                         });
@@ -752,8 +837,6 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
                         const turnId = asString(turn?.id);
                         if (turnId) {
                             this.currentTurnId = turnId;
-                        } else if (!this.currentTurnId) {
-                            allowAnonymousTerminalEvent = true;
                         }
                     } else if (mcpClient) {
                         const startConfig: CodexSessionConfig = buildCodexStartConfig({
@@ -766,6 +849,62 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
 
                         await mcpClient.startSession(startConfig, { signal: this.abortController.signal });
                         syncSessionId();
+                    } else if (useSdk && sdkClient) {
+                        const sdkOptions = buildCodexSdkOptions({
+                            mcpServers
+                        });
+                        const sdkThreadOptions = buildCodexSdkThreadOptions({
+                            mode: message.mode,
+                            cwd: session.path,
+                            cliOverrides: session.codexCliOverrides
+                        });
+
+                        const resumeCandidate = session.sessionId;
+                        let threadId: string | null = null;
+
+                        if (resumeCandidate) {
+                            try {
+                                const resumeResponse = await sdkClient.resumeThread({
+                                    threadId: resumeCandidate,
+                                    sdkOptions,
+                                    threadOptions: sdkThreadOptions
+                                });
+                                threadId = asString(resumeResponse.thread.id) ?? resumeCandidate;
+                                logger.debug(`[Codex] Resumed SDK thread ${threadId}`);
+                            } catch (error) {
+                                logger.warn(`[Codex] Failed to resume SDK thread ${resumeCandidate}, starting new thread`, error);
+                            }
+                        }
+
+                        if (!threadId) {
+                            const startResponse = await sdkClient.startThread({
+                                sdkOptions,
+                                threadOptions: sdkThreadOptions
+                            });
+                            threadId = asString(startResponse.thread.id);
+                            if (threadId) {
+                                logger.debug(`[Codex] Started SDK thread ${threadId}`);
+                            } else {
+                                logger.debug('[Codex] Started SDK thread (id will arrive via thread.started event)');
+                            }
+                        }
+
+                        if (threadId) {
+                            this.currentThreadId = threadId;
+                            session.onSessionFound(threadId);
+                        }
+
+                        startTurnTracking();
+                        const turnResponse = await sdkClient.startTurn({
+                            input: [{ type: 'text', text: message.message }],
+                            signal: this.abortController.signal
+                        });
+                        const turnRecord = asRecord(turnResponse);
+                        const turn = turnRecord ? asRecord(turnRecord.turn) : null;
+                        const turnId = asString(turn?.id);
+                        if (turnId) {
+                            this.currentTurnId = turnId;
+                        }
                     }
 
                     wasCreated = true;
@@ -784,8 +923,7 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
                         mode: message.mode,
                         cliOverrides: session.codexCliOverrides
                     });
-                    turnInFlight = true;
-                    allowAnonymousTerminalEvent = false;
+                    startTurnTracking();
                     const turnResponse = await appServerClient.startTurn(turnParams, {
                         signal: this.abortController.signal
                     });
@@ -794,8 +932,18 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
                     const turnId = asString(turn?.id);
                     if (turnId) {
                         this.currentTurnId = turnId;
-                    } else if (!this.currentTurnId) {
-                        allowAnonymousTerminalEvent = true;
+                    }
+                } else if (useSdk && sdkClient) {
+                    startTurnTracking();
+                    const turnResponse = await sdkClient.startTurn({
+                        input: [{ type: 'text', text: message.message }],
+                        signal: this.abortController.signal
+                    });
+                    const turnRecord = asRecord(turnResponse);
+                    const turn = turnRecord ? asRecord(turnRecord.turn) : null;
+                    const turnId = asString(turn?.id);
+                    if (turnId) {
+                        this.currentTurnId = turnId;
                     }
                 } else if (mcpClient) {
                     await mcpClient.continueSession(message.message, { signal: this.abortController.signal });
@@ -804,16 +952,15 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
             } catch (error) {
                 logger.warn('Error in codex session:', error);
                 const isAbortError = error instanceof Error && error.name === 'AbortError';
-                if (useAppServer) {
+                if (useAsyncTurnClient) {
                     turnInFlight = false;
-                    allowAnonymousTerminalEvent = false;
-                    this.currentTurnId = null;
+                    clearTurnWatchdog();
                 }
 
                 if (isAbortError) {
                     messageBuffer.addMessage('Aborted by user', 'status');
                     session.sendSessionEvent({ type: 'message', message: 'Aborted by user' });
-                    if (!useAppServer) {
+                    if (!useAsyncTurnClient) {
                         wasCreated = false;
                         currentModeHash = null;
                         logger.debug('[Codex] Marked session as not created after abort for proper resume');
@@ -821,21 +968,15 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
                 } else {
                     messageBuffer.addMessage('Process exited unexpectedly', 'status');
                     session.sendSessionEvent({ type: 'message', message: 'Process exited unexpectedly' });
-                    if (useAppServer) {
-                        this.currentTurnId = null;
+                    if (useAsyncTurnClient) {
                         this.currentThreadId = null;
+                        sdkClient?.clearThread();
                         wasCreated = false;
                     }
                 }
             } finally {
-                const shouldFinalizeTurnState = !useAppServer || !turnInFlight;
-                if (shouldFinalizeTurnState) {
-                    permissionHandler.reset();
-                    reasoningProcessor.abort();
-                    diffProcessor.reset();
-                    appServerEventConverter?.reset();
-                    session.onThinkingChange(false);
-                    clearReadyAfterTurnTimer?.();
+                if (!useAsyncTurnClient || !turnInFlight) {
+                    clearTurnTracking('loop-finally');
                     emitReadyIfIdle({
                         pending,
                         queueSize: () => session.queue.size(),
@@ -846,6 +987,7 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
                 logActiveHandles('after-turn');
             }
         }
+        clearTurnWatchdog();
     }
 
     protected async cleanup(): Promise<void> {
@@ -853,6 +995,9 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
         try {
             if (this.appServerClient) {
                 await this.appServerClient.disconnect();
+            }
+            if (this.sdkClient) {
+                await this.sdkClient.disconnect();
             }
             if (this.mcpClient) {
                 await this.mcpClient.disconnect();

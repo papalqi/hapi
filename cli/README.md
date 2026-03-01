@@ -78,6 +78,29 @@ See `src/configuration.ts` for all options.
 - `HAPI_EXPERIMENTAL` - Enable experimental features (true/1/yes).
 - `HAPI_CLAUDE_PATH` - Path to a specific `claude` executable.
 - `HAPI_HTTP_MCP_URL` - Default MCP target for `hapi mcp`.
+- `CODEX_USE_SDK` - Use Codex SDK transport in Codex remote mode when set to `1`.
+- `CODEX_USE_MCP_SERVER` - Use Codex MCP transport in Codex remote mode when set to `1` (ignored if `CODEX_USE_SDK=1`).
+
+### Codex remote transport (advanced)
+
+Codex remote mode supports three transport backends:
+
+- **app-server** (default)
+- **mcp-server** (`CODEX_USE_MCP_SERVER=1`)
+- **sdk** (`CODEX_USE_SDK=1`)
+
+Selection precedence is:
+
+1. `CODEX_USE_SDK=1` → SDK
+2. else `CODEX_USE_MCP_SERVER=1` → MCP
+3. else → app-server
+
+Notes:
+
+- SDK mode needs `@openai/codex-sdk` installed in the CLI package.
+- Model / permission mode changes from the web UI still apply in remote mode.
+- Codex built-in interactive slash commands are not guaranteed in remote mode.
+- User prompt shortcuts from `~/.codex/prompts` are still available via slash suggestions.
 
 ### Runner
 
