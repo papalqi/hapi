@@ -300,6 +300,47 @@ export function normalizeAgentRecord(
         const data = isObject(content.data) ? content.data : null
         if (!data || typeof data.type !== 'string') return null
 
+        if (data.type === 'token_count') {
+            const info = isObject(data.info) ? data.info as Record<string, unknown> : null
+            const candidates: Array<Record<string, unknown> | null> = [
+                isObject(info?.last) ? info.last as Record<string, unknown> : null,
+                isObject(info?.total) ? info.total as Record<string, unknown> : null,
+                info
+            ]
+
+            let inputTokens: number | null = null
+            let outputTokens: number | null = null
+
+            for (const candidate of candidates) {
+                if (!candidate) continue
+                const nextInputTokens = asNumber(candidate.input_tokens ?? candidate.inputTokens)
+                const nextOutputTokens = asNumber(candidate.output_tokens ?? candidate.outputTokens)
+                if (nextInputTokens !== null && nextOutputTokens !== null) {
+                    inputTokens = nextInputTokens
+                    outputTokens = nextOutputTokens
+                    break
+                }
+            }
+
+            if (inputTokens === null || outputTokens === null) {
+                return null
+            }
+
+            return {
+                id: messageId,
+                localId,
+                createdAt,
+                role: 'agent',
+                isSidechain: false,
+                content: [],
+                usage: {
+                    input_tokens: inputTokens,
+                    output_tokens: outputTokens
+                },
+                meta
+            }
+        }
+
         if (data.type === 'message' && typeof data.message === 'string') {
             return {
                 id: messageId,

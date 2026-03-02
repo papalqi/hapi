@@ -339,6 +339,10 @@ function SessionItem(props: {
     })
 
     const sessionName = getSessionTitle(s)
+    const flavor = s.metadata?.flavor?.trim() ?? null
+    const isCodexFamilyFlavor = flavor === 'codex' || flavor === 'gemini' || flavor === 'opencode'
+    const modelLabelKey = isCodexFamilyFlavor ? 'session.item.model' : 'session.item.modelMode'
+    const modelValue = isCodexFamilyFlavor ? (s.metadata?.model ?? 'auto') : (s.modelMode || 'default')
     const statusDotClass = s.active
         ? (s.thinking ? 'bg-[#007AFF]' : 'bg-[var(--app-badge-success-text)]')
         : 'bg-[var(--app-hint)]'
@@ -400,7 +404,7 @@ function SessionItem(props: {
                         </span>
                         {getAgentLabel(s)}
                     </span>
-                    <span>{t('session.item.modelMode')}: {s.modelMode || 'default'}</span>
+                    <span>{t(modelLabelKey)}: {modelValue}</span>
                     {s.metadata?.worktree?.branch ? (
                         <span>{t('session.item.worktree')}: {s.metadata.worktree.branch}</span>
                     ) : null}
@@ -460,7 +464,7 @@ function SessionItem(props: {
 function MachineNameEditor(props: {
     machineId: string
     currentName: string
-    onSave: (machineId: string, newName: string) => void
+    onSave: (machineId: string, newName: string | null) => void
     onCancel: () => void
     isSaving?: boolean
 }) {
@@ -469,11 +473,12 @@ function MachineNameEditor(props: {
 
     const handleSave = () => {
         const trimmed = value.trim()
-        if (trimmed && trimmed !== props.currentName) {
-            props.onSave(props.machineId, trimmed)
-        } else {
+        const currentTrimmed = props.currentName.trim()
+        if (trimmed === currentTrimmed) {
             props.onCancel()
+            return
         }
+        props.onSave(props.machineId, trimmed.length > 0 ? trimmed : null)
     }
 
     return (
@@ -531,21 +536,32 @@ export function SessionList(props: {
     const [editingMachineId, setEditingMachineId] = useState<string | null>(null)
     const [savingMachineId, setSavingMachineId] = useState<string | null>(null)
 
-    const handleSaveMachineName = (machineId: string, newName: string) => {
+    const handleSaveMachineName = (machineId: string, newName: string | null) => {
         if (!api) {
             setEditingMachineId(null)
             return
         }
+
+        const machineOnline = machines.some((machine) => machine.id === machineId)
+        if (!machineOnline) {
+            window.alert(t('machine.renameOnlineOnly'))
+            setEditingMachineId(null)
+            return
+        }
+
         setSavingMachineId(machineId)
         void api.renameMachine(machineId, newName)
+            .then(() => {
+                setEditingMachineId(null)
+            })
             .catch((error) => {
                 if (import.meta.env.DEV) {
                     console.error('Failed to rename machine:', error)
                 }
+                window.alert(t('machine.renameFailed'))
             })
             .finally(() => {
                 setSavingMachineId(null)
-                setEditingMachineId(null)
             })
     }
 
@@ -634,6 +650,8 @@ export function SessionList(props: {
             <div className="flex flex-col">
                 {machineGroups.map((machineGroup) => {
                     const machineCollapsed = isMachineCollapsed(machineGroup)
+                    const machineOnline = machines.some((machine) => machine.id === machineGroup.machineId)
+                    const renameDisabled = !api || !machineOnline || savingMachineId === machineGroup.machineId
                     return (
                         <div key={machineGroup.machineId}>
                             {/* 一级分类：机器 */}
@@ -665,11 +683,12 @@ export function SessionList(props: {
                                                 type="button"
                                                 onClick={(e) => {
                                                     e.stopPropagation()
+                                                    if (renameDisabled) return
                                                     setEditingMachineId(machineGroup.machineId)
                                                 }}
                                                 className="p-0.5 rounded hover:bg-[var(--app-subtle-bg)] text-[var(--app-hint)] hover:text-[var(--app-fg)] opacity-100 transition-opacity"
-                                                title={t('machine.rename')}
-                                                disabled={!api}
+                                                title={machineOnline ? t('machine.rename') : t('machine.renameOnlineOnly')}
+                                                disabled={renameDisabled}
                                             >
                                                 <EditIcon />
                                             </button>

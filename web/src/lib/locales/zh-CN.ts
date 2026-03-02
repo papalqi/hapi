@@ -132,6 +132,8 @@ export default {
   // Machine
   'machine.unknown': '未知平台',
   'machine.rename': '重命名机器',
+  'machine.renameOnlineOnly': '机器需在线才能重命名',
+  'machine.renameFailed': '重命名机器失败，请重试',
   'machine.save': '保存',
   'machine.cancel': '取消',
 

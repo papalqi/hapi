@@ -70,6 +70,10 @@ export function SessionHeader(props: {
     const { session, api, onSessionDeleted } = props
     const title = useMemo(() => getSessionTitle(session), [session])
     const worktreeBranch = session.metadata?.worktree?.branch
+    const flavor = session.metadata?.flavor?.trim() ?? null
+    const isCodexFamilyFlavor = flavor === 'codex' || flavor === 'gemini' || flavor === 'opencode'
+    const modelLabelKey = isCodexFamilyFlavor ? 'session.item.model' : 'session.item.modelMode'
+    const modelValue = isCodexFamilyFlavor ? (session.metadata?.model ?? 'auto') : (session.modelMode || 'default')
 
     const [menuOpen, setMenuOpen] = useState(false)
     const [menuAnchorPoint, setMenuAnchorPoint] = useState<{ x: number; y: number }>({ x: 0, y: 0 })
@@ -145,7 +149,7 @@ export function SessionHeader(props: {
                                 {session.metadata?.flavor?.trim() || 'unknown'}
                             </span>
                             <span>
-                                {t('session.item.modelMode')}: {session.modelMode || 'default'}
+                                {t(modelLabelKey)}: {modelValue}
                             </span>
                             {worktreeBranch ? (
                                 <span>{t('session.item.worktree')}: {worktreeBranch}</span>

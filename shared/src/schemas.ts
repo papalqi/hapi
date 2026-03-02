@@ -23,6 +23,7 @@ export const MetadataSchema = z.object({
     path: z.string(),
     host: z.string(),
     version: z.string().optional(),
+    model: z.string().optional(),
     name: z.string().optional(),
     os: z.string().optional(),
     summary: MetadataSummarySchema.optional(),

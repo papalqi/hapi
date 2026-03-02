@@ -130,6 +130,8 @@ export default {
   // Machine
   'machine.unknown': 'Unknown platform',
   'machine.rename': 'Rename machine',
+  'machine.renameOnlineOnly': 'Machine must be online to rename.',
+  'machine.renameFailed': 'Failed to rename machine. Please try again.',
   'machine.save': 'Save',
   'machine.cancel': 'Cancel',
 
