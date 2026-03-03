@@ -368,6 +368,7 @@ export function SessionChat(props: {
                         disabled={props.isSending}
                         permissionMode={props.session.permissionMode}
                         modelMode={props.session.modelMode}
+                        codexTransport={props.session.metadata?.codexTransport}
                         agentFlavor={agentFlavor}
                         active={props.session.active}
                         allowSendWhenInactive

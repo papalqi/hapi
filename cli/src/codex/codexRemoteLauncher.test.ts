@@ -47,6 +47,10 @@ vi.mock('./codexAppServerClient', () => {
             return { turn: {} };
         }
 
+        async steerTurn(): Promise<{ turnId: string }> {
+            return { turnId: 'turn-anonymous' };
+        }
+
         async interruptTurn(): Promise<Record<string, never>> {
             return {};
         }

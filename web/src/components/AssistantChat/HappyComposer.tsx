@@ -40,6 +40,7 @@ export function HappyComposer(props: {
     disabled?: boolean
     permissionMode?: PermissionMode
     modelMode?: ModelMode
+    codexTransport?: 'auto' | 'app-server' | 'mcp' | 'sdk'
     active?: boolean
     allowSendWhenInactive?: boolean
     thinking?: boolean
@@ -64,6 +65,7 @@ export function HappyComposer(props: {
         disabled = false,
         permissionMode: rawPermissionMode,
         modelMode: rawModelMode,
+        codexTransport,
         active = true,
         allowSendWhenInactive = false,
         thinking = false,
@@ -108,7 +110,13 @@ export function HappyComposer(props: {
         const path = (attachment as { path?: string }).path
         return typeof path === 'string' && path.length > 0
     })
-    const canSend = (hasText || hasAttachments) && attachmentsReady && !controlsDisabled && !threadIsRunning
+    const supportsMidTurnSend =
+        agentFlavor === 'codex'
+        && (codexTransport === undefined || codexTransport === 'auto' || codexTransport === 'app-server')
+    const canSend = (hasText || hasAttachments)
+        && attachmentsReady
+        && !controlsDisabled
+        && (!threadIsRunning || supportsMidTurnSend)
 
     const [inputState, setInputState] = useState<TextInputState>({
         text: '',

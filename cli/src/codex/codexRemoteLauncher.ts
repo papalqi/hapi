@@ -309,6 +309,16 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
             );
         };
 
+        const isTurnSteerPreconditionError = (error: unknown): boolean => {
+            const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+            return (
+                message.includes('expectedturnid')
+                || message.includes('expected turn id')
+                || (message.includes('turn') && message.includes('active'))
+                || message.includes('turn mismatch')
+            );
+        };
+
         const permissionHandler = new CodexPermissionHandler(session.client, {
             onRequest: ({ id, toolName, input }) => {
                 const inputRecord = input && typeof input === 'object' ? input as Record<string, unknown> : {};
@@ -970,6 +980,46 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
                         wasCreated = false;
                         pending = message;
                         continue;
+                    }
+
+                    if (turnInFlight) {
+                        if (!this.currentTurnId) {
+                            logger.debug('[Codex] Turn in flight without turn id; waiting for lifecycle sync');
+                            pending = message;
+                            continue;
+                        }
+
+                        try {
+                            const steerResponse = await appServerClient.steerTurn({
+                                threadId: this.currentThreadId,
+                                expectedTurnId: this.currentTurnId,
+                                input: [{ type: 'text', text: message.message }]
+                            }, {
+                                signal: this.abortController.signal
+                            });
+                            const steerRecord = asRecord(steerResponse);
+                            const steerTurnId = asString(
+                                steerRecord?.turnId
+                                ?? steerRecord?.turn_id
+                                ?? asRecord(steerRecord?.turn)?.id
+                            );
+                            if (steerTurnId) {
+                                this.currentTurnId = steerTurnId;
+                            }
+                            markTurnProgress();
+                            logger.debug('[Codex] Steered active turn with follow-up user input');
+                            continue;
+                        } catch (steerError) {
+                            if (!isTurnSteerPreconditionError(steerError)) {
+                                throw steerError;
+                            }
+                            logger.debug('[Codex] turn/steer precondition failed, retrying as normal turn');
+                            turnInFlight = false;
+                            clearTurnWatchdog();
+                            this.currentTurnId = null;
+                            pending = message;
+                            continue;
+                        }
                     }
 
                     const turnParams = buildTurnStartParams({
