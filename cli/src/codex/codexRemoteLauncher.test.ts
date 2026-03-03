@@ -230,7 +230,8 @@ describe('codexRemoteLauncher', () => {
         expect(harness.registerRequestCalls).toEqual([
             'item/commandExecution/requestApproval',
             'item/fileChange/requestApproval',
-            'item/tool/requestUserInput'
+            'item/tool/requestUserInput',
+            'item/tool/call'
         ]);
         expect(sessionEvents.filter((event) => event.type === 'ready').length).toBeGreaterThanOrEqual(1);
         expect(thinkingChanges).toContain(true);
