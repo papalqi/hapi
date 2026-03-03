@@ -117,6 +117,8 @@ export interface TurnStartParams {
 }
 
 export interface TurnStartResponse {
+    turnId?: string;
+    turn_id?: string;
     turn: {
         id: string;
         status?: string;
@@ -132,6 +134,7 @@ export interface TurnSteerParams {
 
 export interface TurnSteerResponse {
     turnId: string;
+    turn_id?: string;
     [key: string]: unknown;
 }
 

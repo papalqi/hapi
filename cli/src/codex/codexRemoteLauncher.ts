@@ -185,6 +185,12 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
             return typeof value === 'string' && value.length > 0 ? value : null;
         };
 
+        const extractTurnIdFromResponse = (response: unknown): string | null => {
+            const record = asRecord(response);
+            if (!record) return null;
+            return asString(record.turnId ?? record.turn_id ?? asRecord(record.turn)?.id);
+        };
+
         const formatOutputPreview = (value: unknown): string => {
             if (typeof value === 'string') return value;
             if (typeof value === 'number' || typeof value === 'boolean') return String(value);
@@ -897,9 +903,7 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
                         const turnResponse = await appServerClient.startTurn(turnParams, {
                             signal: this.abortController.signal
                         });
-                        const turnRecord = asRecord(turnResponse);
-                        const turn = turnRecord ? asRecord(turnRecord.turn) : null;
-                        const turnId = asString(turn?.id);
+                        const turnId = extractTurnIdFromResponse(turnResponse);
                         if (turnId) {
                             this.currentTurnId = turnId;
                         }
@@ -964,9 +968,7 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
                             input: [{ type: 'text', text: message.message }],
                             signal: this.abortController.signal
                         });
-                        const turnRecord = asRecord(turnResponse);
-                        const turn = turnRecord ? asRecord(turnRecord.turn) : null;
-                        const turnId = asString(turn?.id);
+                        const turnId = extractTurnIdFromResponse(turnResponse);
                         if (turnId) {
                             this.currentTurnId = turnId;
                         }
@@ -1032,9 +1034,7 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
                     const turnResponse = await appServerClient.startTurn(turnParams, {
                         signal: this.abortController.signal
                     });
-                    const turnRecord = asRecord(turnResponse);
-                    const turn = turnRecord ? asRecord(turnRecord.turn) : null;
-                    const turnId = asString(turn?.id);
+                    const turnId = extractTurnIdFromResponse(turnResponse);
                     if (turnId) {
                         this.currentTurnId = turnId;
                     }
@@ -1044,9 +1044,7 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
                         input: [{ type: 'text', text: message.message }],
                         signal: this.abortController.signal
                     });
-                    const turnRecord = asRecord(turnResponse);
-                    const turn = turnRecord ? asRecord(turnRecord.turn) : null;
-                    const turnId = asString(turn?.id);
+                    const turnId = extractTurnIdFromResponse(turnResponse);
                     if (turnId) {
                         this.currentTurnId = turnId;
                     }

@@ -44,6 +44,7 @@ export async function runHappyMcpStdioBridge(argv: string[]): Promise<void> {
     }
 
     let httpClient: Client | null = null;
+    let httpTransport: StreamableHTTPClientTransport | null = null;
 
     async function ensureHttpClient(): Promise<Client> {
       if (httpClient) return httpClient;
@@ -55,7 +56,20 @@ export async function runHappyMcpStdioBridge(argv: string[]): Promise<void> {
       const transport = new StreamableHTTPClientTransport(new URL(baseUrl));
       await client.connect(transport);
       httpClient = client;
+      httpTransport = transport;
       return client;
+    }
+
+    async function resetHttpClient(): Promise<void> {
+      if (httpTransport) {
+        try {
+          await httpTransport.close();
+        } catch {
+          // ignore transport close errors
+        }
+      }
+      httpClient = null;
+      httpTransport = null;
     }
 
     // Create STDIO MCP server
@@ -78,10 +92,21 @@ export async function runHappyMcpStdioBridge(argv: string[]): Promise<void> {
       },
       async (args: Record<string, unknown>) => {
         try {
-          const client = await ensureHttpClient();
-          const response = await client.callTool({ name: 'change_title', arguments: args });
-          // Pass-through response from HTTP server
-          return response as any;
+          const doCall = async (): Promise<unknown> => {
+            const client = await ensureHttpClient();
+            return await client.callTool({ name: 'change_title', arguments: args });
+          };
+
+          try {
+            const response = await doCall();
+            // Pass-through response from HTTP server
+            return response as any;
+          } catch {
+            // Retry once with a fresh Streamable HTTP client/transport.
+            await resetHttpClient();
+            const response = await doCall();
+            return response as any;
+          }
         } catch (error) {
           return {
             content: [
