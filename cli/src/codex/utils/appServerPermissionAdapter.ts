@@ -113,11 +113,16 @@ export function registerAppServerPermissionHandlers(args: {
             return { decision: 'cancel' };
         }
 
-        const answers = await onUserInputRequest(params);
-        return {
-            decision: 'accept',
-            answers
-        };
+        try {
+            const answers = await onUserInputRequest(params);
+            return {
+                decision: 'accept',
+                answers
+            };
+        } catch (error) {
+            logger.debug('[CodexAppServer] User-input request failed; cancelling', { error });
+            return { decision: 'cancel' };
+        }
     });
 
     client.registerRequestHandler('item/tool/call', async (params) => {

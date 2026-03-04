@@ -42,12 +42,11 @@ function resolveTransport(): CodexRemoteTransport {
 
 class CodexRemoteLauncher extends RemoteLauncherBase {
     private readonly session: CodexSession;
-    private readonly transport: CodexRemoteTransport;
-    private readonly useAppServer: boolean;
-    private readonly useSdk: boolean;
+    private transport: CodexRemoteTransport;
     private readonly mcpClient: CodexMcpClient | null;
-    private readonly appServerClient: CodexAppServerClient | null;
-    private readonly sdkClient: CodexSdkClient | null;
+    private readonly appServerClient: CodexAppServerClient;
+    private readonly sdkClient: CodexSdkClient;
+    private appServerInitialized = false;
     private permissionHandler: CodexPermissionHandler | null = null;
     private reasoningProcessor: ReasoningProcessor | null = null;
     private diffProcessor: DiffProcessor | null = null;
@@ -60,11 +59,9 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
         super(process.env.DEBUG ? session.logPath : undefined);
         this.session = session;
         this.transport = resolveTransport();
-        this.useAppServer = this.transport === 'app-server';
-        this.useSdk = this.transport === 'sdk';
         this.mcpClient = this.transport === 'mcp' ? new CodexMcpClient() : null;
-        this.appServerClient = this.transport === 'app-server' ? new CodexAppServerClient() : null;
-        this.sdkClient = this.transport === 'sdk' ? new CodexSdkClient() : null;
+        this.appServerClient = new CodexAppServerClient();
+        this.sdkClient = new CodexSdkClient();
     }
 
     protected createDisplay(context: RemoteLauncherDisplayContext): React.ReactElement {
@@ -74,7 +71,7 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
     private async handleAbort(): Promise<void> {
         logger.debug('[Codex] Abort requested - stopping current task');
         try {
-            if (this.useAppServer && this.appServerClient) {
+            if (this.transport === 'app-server') {
                 if (this.currentThreadId && this.currentTurnId) {
                     try {
                         await this.appServerClient.interruptTurn({
@@ -89,7 +86,7 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
                 this.currentTurnId = null;
             }
 
-            if (this.useSdk && this.sdkClient) {
+            if (this.transport === 'sdk') {
                 if (this.currentTurnId) {
                     try {
                         await this.sdkClient.interruptTurn();
@@ -154,13 +151,20 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
     protected async runMainLoop(): Promise<void> {
         const session = this.session;
         const messageBuffer = this.messageBuffer;
-        const useAppServer = this.useAppServer;
-        const useSdk = this.useSdk;
-        const useAsyncTurnClient = useAppServer || useSdk;
+        let useAppServer = this.transport === 'app-server';
+        let useSdk = this.transport === 'sdk';
+        let useAsyncTurnClient = useAppServer || useSdk;
         const mcpClient = this.mcpClient;
         const appServerClient = this.appServerClient;
         const sdkClient = this.sdkClient;
-        const appServerEventConverter = useAppServer ? new AppServerEventConverter() : null;
+        const appServerEventConverter = new AppServerEventConverter();
+
+        const setTransport = (next: CodexRemoteTransport): void => {
+            this.transport = next;
+            useAppServer = next === 'app-server';
+            useSdk = next === 'sdk';
+            useAsyncTurnClient = useAppServer || useSdk;
+        };
 
         const normalizeCommand = (value: unknown): string | undefined => {
             if (typeof value === 'string') {
@@ -327,6 +331,13 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
 
         const permissionHandler = new CodexPermissionHandler(session.client, {
             onRequest: ({ id, toolName, input }) => {
+                // User-input tools (AskUserQuestion / request_user_input) should be rendered
+                // directly from agentState in the web UI. Emitting a synthetic CodexPermission
+                // tool-call here would hide the interactive payload/options.
+                if (toolName === 'AskUserQuestion' || toolName === 'ask_user_question' || toolName === 'request_user_input') {
+                    return;
+                }
+
                 const inputRecord = input && typeof input === 'object' ? input as Record<string, unknown> : {};
                 const message = typeof inputRecord.message === 'string' ? inputRecord.message : undefined;
                 const rawCommand = inputRecord.command;
@@ -351,7 +362,17 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
                     id: randomUUID()
                 });
             },
-            onComplete: ({ id, decision, reason, approved }) => {
+            onComplete: ({ id, toolName, decision, reason, approved }) => {
+                // See onRequest: keep user-input requests purely in agentState so the web UI
+                // can show the original question/options. A synthetic CodexPermission result
+                // would overwrite/hide that payload.
+                //
+                // Note: if a future UI wants to show a transcript entry, prefer emitting the
+                // actual tool name (AskUserQuestion) instead of CodexPermission.
+                if (toolName === 'AskUserQuestion' || toolName === 'ask_user_question' || toolName === 'request_user_input') {
+                    return;
+                }
+
                 session.sendCodexMessage({
                     type: 'tool-call-result',
                     callId: id,
@@ -572,7 +593,7 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
                     wasCreated = false;
                     currentModeHash = null;
                     mcpClient?.clearSession();
-                    sdkClient?.clearThread();
+                    sdkClient.clearThread();
                     logger.debug('[Codex] Forced session reset after stream error (session invalid)');
                 } else {
                     logger.debug('[Codex] Keeping session state after stream error to preserve context');
@@ -592,7 +613,7 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
                     wasCreated = false;
                     currentModeHash = null;
                     mcpClient?.clearSession();
-                    sdkClient?.clearThread();
+                    sdkClient.clearThread();
                     logger.debug('[Codex] Forced session reset after API error (session invalid)');
                 } else {
                     logger.debug('[Codex] Keeping session state after API error to preserve context');
@@ -740,25 +761,113 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
             }
         };
 
-        if (useAppServer && appServerClient && appServerEventConverter) {
-            registerAppServerPermissionHandlers({
-                client: appServerClient,
-                permissionHandler
-            });
+        registerAppServerPermissionHandlers({
+            client: appServerClient,
+            permissionHandler,
+            onUserInputRequest: async (params) => {
+                // Bridge Codex app-server interactive user input requests into the normal
+                // permission pipeline so the web UI can render selectable options.
+                //
+                // We model this as an AskUserQuestion tool-call since the web already
+                // has a rich UI for it, and the app-server adapter expects flat answers
+                // (Record<string, string[]>).
 
-            appServerClient.setNotificationHandler((method, params) => {
-                const events = appServerEventConverter.handleNotification(method, params);
-                for (const event of events) {
-                    const eventRecord = asRecord(event) ?? { type: undefined };
-                    handleCodexEvent(eventRecord);
-                }
-            });
-        } else if (useSdk && sdkClient) {
-            sdkClient.setHandler((event) => {
+                const record = asRecord(params) ?? {};
+                const requestId = asString(
+                    record.itemId
+                    ?? record.itemID
+                    ?? record.requestId
+                    ?? record.requestID
+                    ?? record.call_id
+                    ?? record.callId
+                    ?? record.id
+                ) ?? randomUUID();
+
+                const normalizeOption = (value: unknown): { label: string; description: string | null } | null => {
+                    if (typeof value === 'string') {
+                        const label = value.trim();
+                        return label.length > 0 ? { label, description: null } : null;
+                    }
+                    const opt = asRecord(value);
+                    if (!opt) return null;
+                    const label = asString(opt.label ?? opt.title ?? opt.text ?? opt.value) ?? '';
+                    if (!label) return null;
+                    const description = asString(opt.description) ?? null;
+                    return { label, description };
+                };
+
+                const normalizeQuestion = (value: unknown, _index: number): Record<string, unknown> | null => {
+                    const q = asRecord(value);
+                    if (!q) return null;
+
+                    const questionText = asString(q.question ?? q.text ?? q.prompt ?? q.message) ?? '';
+                    const header = asString(q.header ?? q.title ?? q.name) ?? null;
+                    const rawMulti =
+                        q.multiSelect
+                        ?? q.multi_select
+                        ?? q.multi
+                        ?? q.multiselect;
+                    const multiSelect = rawMulti === true;
+
+                    const rawOptions = q.options ?? q.choices ?? q.answers ?? q.optionsList;
+                    const options = Array.isArray(rawOptions)
+                        ? rawOptions.map(normalizeOption).filter(Boolean)
+                        : [];
+
+                    // AskUserQuestion allows a free-form "Other" answer even when options are empty.
+                    // But we still need a question prompt to show.
+                    if (!questionText && options.length === 0) {
+                        return null;
+                    }
+
+                    return {
+                        header,
+                        question: questionText,
+                        options,
+                        multiSelect
+                    };
+                };
+
+                const rawQuestions = record.questions ?? record.prompts ?? record.items;
+                const questions = Array.isArray(rawQuestions)
+                    ? rawQuestions
+                        .map((q, idx) => normalizeQuestion(q, idx))
+                        .filter((q): q is Record<string, unknown> => Boolean(q))
+                    : [];
+
+                const fallbackPrompt = asString(record.question ?? record.prompt ?? record.message ?? record.title) ?? '';
+
+                const input = questions.length > 0
+                    ? { questions }
+                    : {
+                        questions: [
+                            {
+                                header: null,
+                                question: fallbackPrompt,
+                                options: [],
+                                multiSelect: false
+                            }
+                        ]
+                    };
+
+                return await permissionHandler.handleUserInputRequest(requestId, 'AskUserQuestion', input);
+            }
+        });
+
+        appServerClient.setNotificationHandler((method, params) => {
+            const events = appServerEventConverter.handleNotification(method, params);
+            for (const event of events) {
                 const eventRecord = asRecord(event) ?? { type: undefined };
                 handleCodexEvent(eventRecord);
-            });
-        } else if (mcpClient) {
+            }
+        });
+
+        sdkClient.setHandler((event) => {
+            const eventRecord = asRecord(event) ?? { type: undefined };
+            handleCodexEvent(eventRecord);
+        });
+
+        if (mcpClient) {
             mcpClient.setPermissionHandler(permissionHandler);
             mcpClient.setHandler((msg) => {
                 const eventRecord = asRecord(msg) ?? { type: undefined };
@@ -786,7 +895,8 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
             } catch {}
         }
 
-        if (useAppServer && appServerClient) {
+        const ensureAppServerInitialized = async (): Promise<void> => {
+            if (this.appServerInitialized) return;
             await appServerClient.connect();
             await appServerClient.initialize({
                 clientInfo: {
@@ -794,7 +904,12 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
                     version: '1.0.0'
                 }
             });
-        } else if (useSdk && sdkClient) {
+            this.appServerInitialized = true;
+        };
+
+        if (useAppServer) {
+            await ensureAppServerInitialized();
+        } else if (useSdk) {
             await sdkClient.connect({
                 sdkOptions: buildCodexSdkOptions({
                     mcpServers
@@ -831,7 +946,7 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
                 messageBuffer.addMessage('═'.repeat(40), 'status');
                 messageBuffer.addMessage('Starting new Codex session (mode changed)...', 'status');
                 mcpClient?.clearSession();
-                sdkClient?.clearThread();
+                sdkClient.clearThread();
                 wasCreated = false;
                 currentModeHash = null;
                 pending = message;
@@ -847,7 +962,24 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
 
             try {
                 if (!wasCreated) {
-                    if (useAppServer && appServerClient) {
+                    if (useSdk && message.mode.collaborationMode === 'plan') {
+                        // Codex plan collaboration mode uses interactive user-input prompts that
+                        // are only available via `codex app-server` today. The SDK transport
+                        // (`codex exec --experimental-json`) cannot surface these prompts
+                        // reliably, so automatically switch to app-server to preserve UX.
+                        const warning = 'Plan mode requires Codex app-server; switching transport (sdk → app-server).';
+                        messageBuffer.addMessage(warning, 'status');
+                        session.sendSessionEvent({ type: 'message', message: warning });
+
+                        sdkClient.clearThread();
+                        this.currentThreadId = null;
+                        this.currentTurnId = null;
+                        setTransport('app-server');
+                        await ensureAppServerInitialized();
+                    }
+
+                    if (useAppServer) {
+                        await ensureAppServerInitialized();
                         const threadParams = buildThreadStartParams({
                             mode: message.mode,
                             mcpServers,
@@ -918,9 +1050,10 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
 
                         await mcpClient.startSession(startConfig, { signal: this.abortController.signal });
                         syncSessionId();
-                    } else if (useSdk && sdkClient) {
+                    } else if (useSdk) {
                         const sdkOptions = buildCodexSdkOptions({
-                            mcpServers
+                            mcpServers,
+                            collaborationMode: message.mode.collaborationMode
                         });
                         const sdkThreadOptions = buildCodexSdkThreadOptions({
                             mode: message.mode,
@@ -976,7 +1109,7 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
 
                     wasCreated = true;
                     first = false;
-                } else if (useAppServer && appServerClient) {
+                } else if (useAppServer) {
                     if (!this.currentThreadId) {
                         logger.debug('[Codex] Missing thread id; restarting app-server thread');
                         wasCreated = false;
@@ -1038,7 +1171,7 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
                     if (turnId) {
                         this.currentTurnId = turnId;
                     }
-                } else if (useSdk && sdkClient) {
+                } else if (useSdk) {
                     startTurnTracking();
                     const turnResponse = await sdkClient.startTurn({
                         input: [{ type: 'text', text: message.message }],
@@ -1073,7 +1206,9 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
                     session.sendSessionEvent({ type: 'message', message: 'Process exited unexpectedly' });
                     if (useAsyncTurnClient) {
                         this.currentThreadId = null;
-                        sdkClient?.clearThread();
+                        if (useSdk) {
+                            sdkClient.clearThread();
+                        }
                         wasCreated = false;
                     }
                 }
@@ -1096,12 +1231,8 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
     protected async cleanup(): Promise<void> {
         logger.debug('[codex-remote]: cleanup start');
         try {
-            if (this.appServerClient) {
-                await this.appServerClient.disconnect();
-            }
-            if (this.sdkClient) {
-                await this.sdkClient.disconnect();
-            }
+            await this.appServerClient.disconnect();
+            await this.sdkClient.disconnect();
             if (this.mcpClient) {
                 await this.mcpClient.disconnect();
             }

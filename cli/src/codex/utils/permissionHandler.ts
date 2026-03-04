@@ -18,6 +18,7 @@ interface PermissionResponse {
     approved: boolean;
     decision?: 'approved' | 'approved_for_session' | 'denied' | 'abort';
     reason?: string;
+    // Flat (AskUserQuestion) or nested (request_user_input)
     answers?: Record<string, string[]> | Record<string, { answers: string[] }>;
 }
 
@@ -36,8 +37,47 @@ type CodexPermissionHandlerOptions = {
         approved: boolean;
         decision: PermissionResult['decision'];
         reason?: string;
+        answers?: PermissionResult['answers'];
     }) => void;
 };
+
+function isUserInputToolName(toolName: string): boolean {
+    return toolName === 'AskUserQuestion'
+        || toolName === 'ask_user_question'
+        || toolName === 'request_user_input';
+}
+
+function normalizeAnswers(
+    answers: Record<string, string[]> | Record<string, { answers: string[] }> | undefined
+): Record<string, string[]> {
+    if (!answers || typeof answers !== 'object') {
+        return {};
+    }
+
+    const normalized: Record<string, string[]> = {};
+
+    for (const [key, value] of Object.entries(answers)) {
+        if (Array.isArray(value)) {
+            const filtered = value.filter((item): item is string => typeof item === 'string');
+            normalized[key] = filtered;
+            continue;
+        }
+
+        if (!value || typeof value !== 'object') {
+            continue;
+        }
+
+        const nested = value as { answers?: unknown };
+        if (!Array.isArray(nested.answers)) {
+            continue;
+        }
+
+        const filtered = nested.answers.filter((item): item is string => typeof item === 'string');
+        normalized[key] = filtered;
+    }
+
+    return normalized;
+}
 
 export class CodexPermissionHandler extends BasePermissionHandler<PermissionResponse, PermissionResult> {
     constructor(session: ApiSessionClient, private readonly options?: CodexPermissionHandlerOptions) {
@@ -81,6 +121,26 @@ export class CodexPermissionHandler extends BasePermissionHandler<PermissionResp
     }
 
     /**
+     * Handle user-input (questionnaire) requests from Codex app-server.
+     *
+     * Uses the same permission plumbing so the web UI can render a question tool card.
+     */
+    async handleUserInputRequest(
+        requestId: string,
+        toolName: string,
+        input: unknown
+    ): Promise<Record<string, string[]>> {
+        const result = await this.handleToolCall(requestId, toolName, input);
+
+        const normalized = normalizeAnswers(result.answers);
+        if (Object.keys(normalized).length === 0) {
+            throw new Error('No answers were provided.');
+        }
+
+        return normalized;
+    }
+
+    /**
      * Handle permission responses
      */
     protected async handlePermissionResponse(
@@ -101,6 +161,38 @@ export class CodexPermissionHandler extends BasePermissionHandler<PermissionResp
                 answers
             };
 
+        const wantsAnswers = isUserInputToolName(pending.toolName);
+        if (wantsAnswers) {
+            const normalized = normalizeAnswers(response.answers);
+            const hasAnswers = Object.keys(normalized).length > 0;
+
+            if (!response.approved || !hasAnswers) {
+                const fallbackReason = reason ?? 'No answers were provided.';
+                pending.resolve({
+                    decision: response.approved ? 'abort' : result.decision,
+                    reason: fallbackReason
+                });
+
+                logger.debug(`[Codex] User input request denied for ${pending.toolName}`);
+
+                this.options?.onComplete?.({
+                    id: response.id,
+                    toolName: pending.toolName,
+                    input: pending.input,
+                    approved: false,
+                    decision: response.approved ? 'abort' : result.decision,
+                    reason: fallbackReason
+                });
+
+                return {
+                    status: 'denied',
+                    decision: response.approved ? 'abort' : result.decision,
+                    reason: fallbackReason,
+                    answers: response.answers
+                };
+            }
+        }
+
         pending.resolve(result);
         logger.debug(`[Codex] Permission ${response.approved ? 'approved' : 'denied'} for ${pending.toolName}`);
 
@@ -110,7 +202,8 @@ export class CodexPermissionHandler extends BasePermissionHandler<PermissionResp
             input: pending.input,
             approved: response.approved,
             decision: result.decision,
-            reason: result.reason
+            reason: result.reason,
+            ...(result.answers ? { answers: result.answers } : {})
         });
 
         return {

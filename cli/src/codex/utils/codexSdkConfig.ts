@@ -77,6 +77,7 @@ export function buildCodexSdkThreadOptions(args: {
 export function buildCodexSdkOptions(args: {
     mcpServers: McpServersConfig;
     developerInstructions?: string;
+    collaborationMode?: string;
 }): {
     codexPathOverride?: string;
     config: Record<string, unknown>;
@@ -85,14 +86,23 @@ export function buildCodexSdkOptions(args: {
         ? `${codexSystemPrompt}\n\n${args.developerInstructions}`
         : codexSystemPrompt;
 
+    const config: Record<string, unknown> = {
+        mcp_servers: args.mcpServers,
+        developer_instructions: developerInstructions
+    };
+
+    const collaborationMode = typeof args.collaborationMode === 'string'
+        ? args.collaborationMode.trim()
+        : '';
+    if (collaborationMode.length > 0) {
+        config.collaboration_mode = collaborationMode;
+    }
+
     return {
         // On Windows, Codex SDK's default binary discovery relies on @openai/codex optional deps
         // that may be unavailable in compiled single-file distributions.
         // Point explicitly to the globally installed CLI shim instead.
         ...(process.platform === 'win32' ? { codexPathOverride: 'codex.cmd' } : {}),
-        config: {
-            mcp_servers: args.mcpServers,
-            developer_instructions: developerInstructions
-        }
+        config
     };
 }
