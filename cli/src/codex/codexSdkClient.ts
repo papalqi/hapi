@@ -594,6 +594,43 @@ export class CodexSdkClient {
                     continue;
                 }
 
+                if (itemType === 'collabagenttoolcall') {
+                    const action = asString(item.tool);
+                    const senderThreadId = asString(item.senderThreadId ?? item.sender_thread_id);
+                    const receiverThreadIds = Array.isArray(item.receiverThreadIds)
+                        ? item.receiverThreadIds
+                        : Array.isArray(item.receiver_thread_ids)
+                            ? item.receiver_thread_ids
+                            : [];
+                    const prompt = asString(item.prompt);
+
+                    if (eventType === 'item.started') {
+                        this.emit({
+                            type: 'collab_tool_call_begin',
+                            call_id: itemId,
+                            ...(action ? { action } : {}),
+                            ...(senderThreadId ? { sender_thread_id: senderThreadId } : {}),
+                            ...(receiverThreadIds.length > 0 ? { receiver_thread_ids: receiverThreadIds } : {}),
+                            ...(prompt ? { prompt } : {})
+                        });
+                    } else if (eventType === 'item.completed') {
+                        const status = asString(item.status);
+                        const agentsStates = asRecord(item.agentsStates ?? item.agents_states);
+                        this.emit({
+                            type: 'collab_tool_call_end',
+                            call_id: itemId,
+                            ...(action ? { action } : {}),
+                            ...(senderThreadId ? { sender_thread_id: senderThreadId } : {}),
+                            ...(receiverThreadIds.length > 0 ? { receiver_thread_ids: receiverThreadIds } : {}),
+                            ...(prompt ? { prompt } : {}),
+                            ...(status ? { status } : {}),
+                            ...(agentsStates ? { agents_states: agentsStates } : {}),
+                            ...(status ? { success: status !== 'failed' } : {})
+                        });
+                    }
+                    continue;
+                }
+
                 if (itemType === 'error' && eventType === 'item.completed') {
                     const message = asString(item.message) ?? 'SDK item error';
                     this.emit({ type: 'error', message });

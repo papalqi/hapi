@@ -37,7 +37,17 @@ const DIRECT_EVENT_TYPE_ALIASES: Record<string, string> = {
     patch_apply_begin: 'patch_apply_begin',
     patch_apply_end: 'patch_apply_end',
     thread_started: 'thread_started',
-    turn_diff: 'turn_diff'
+    turn_diff: 'turn_diff',
+    collab_agent_spawn_begin: 'collab_tool_call_begin',
+    collab_agent_spawn_end: 'collab_tool_call_end',
+    collab_agent_interaction_begin: 'collab_tool_call_begin',
+    collab_agent_interaction_end: 'collab_tool_call_end',
+    collab_waiting_begin: 'collab_tool_call_begin',
+    collab_waiting_end: 'collab_tool_call_end',
+    collab_close_begin: 'collab_tool_call_begin',
+    collab_close_end: 'collab_tool_call_end',
+    collab_resume_begin: 'collab_tool_call_begin',
+    collab_resume_end: 'collab_tool_call_end'
 };
 
 const DIRECT_EVENT_TYPES = new Set<string>([
@@ -59,7 +69,9 @@ const DIRECT_EVENT_TYPES = new Set<string>([
     'patch_apply_begin',
     'patch_apply_end',
     'thread_started',
-    'turn_diff'
+    'turn_diff',
+    'collab_tool_call_begin',
+    'collab_tool_call_end'
 ]);
 
 function normalizeDirectEventType(value: string): string | null {
@@ -145,6 +157,36 @@ function extractChanges(value: unknown): Record<string, unknown> | null {
     return null;
 }
 
+function normalizeRawType(value: string): string {
+    return value
+        .trim()
+        .toLowerCase()
+        .replace(/^codex\/event\//, '')
+        .replace(/[\/\s-]+/g, '_');
+}
+
+function mapCollabAction(rawType: string): string | null {
+    switch (rawType) {
+        case 'collab_agent_spawn_begin':
+        case 'collab_agent_spawn_end':
+            return 'spawnAgent';
+        case 'collab_agent_interaction_begin':
+        case 'collab_agent_interaction_end':
+            return 'sendInput';
+        case 'collab_waiting_begin':
+        case 'collab_waiting_end':
+            return 'wait';
+        case 'collab_close_begin':
+        case 'collab_close_end':
+            return 'closeAgent';
+        case 'collab_resume_begin':
+        case 'collab_resume_end':
+            return 'resumeAgent';
+        default:
+            return null;
+    }
+}
+
 export class AppServerEventConverter {
     private readonly agentMessageBuffers = new Map<string, string>();
     private readonly reasoningBuffers = new Map<string, string>();
@@ -155,7 +197,8 @@ export class AppServerEventConverter {
     private static readonly UNHANDLED_LOG_INTERVAL_MS = 30_000;
 
     private convertDirectEventRecord(record: Record<string, unknown>, typeHint?: string): ConvertedEvent[] {
-        const normalizedType = normalizeDirectEventType(asString(record.type) ?? typeHint ?? '');
+        const rawType = asString(record.type) ?? typeHint ?? '';
+        const normalizedType = normalizeDirectEventType(rawType);
         if (!normalizedType) return [];
 
         const willRetry = asBoolean(record.will_retry ?? record.willRetry) ?? false;
@@ -223,6 +266,48 @@ export class AppServerEventConverter {
                         : null;
             if (items && converted.items === undefined) {
                 converted.items = items;
+            }
+        }
+
+        if (normalizedType === 'collab_tool_call_begin' || normalizedType === 'collab_tool_call_end') {
+            const callId = asString(record.call_id ?? record.callId ?? record.id);
+            if (callId && converted.call_id === undefined) {
+                converted.call_id = callId;
+            }
+
+            const rawNormalized = normalizeRawType(rawType);
+            const action = mapCollabAction(rawNormalized) ?? asString(record.action ?? record.tool);
+            if (action && converted.action === undefined) {
+                converted.action = action;
+            }
+
+            const senderThreadId = asString(record.sender_thread_id ?? record.senderThreadId);
+            if (senderThreadId && converted.sender_thread_id === undefined) {
+                converted.sender_thread_id = senderThreadId;
+            }
+
+            const receiverThreadIds = Array.isArray(record.receiver_thread_ids)
+                ? record.receiver_thread_ids
+                : Array.isArray(record.receiverThreadIds)
+                    ? record.receiverThreadIds
+                    : null;
+            if (receiverThreadIds && converted.receiver_thread_ids === undefined) {
+                converted.receiver_thread_ids = receiverThreadIds;
+            }
+
+            const receiverThreadId = asString(
+                record.receiver_thread_id
+                ?? record.receiverThreadId
+                ?? record.new_thread_id
+                ?? record.newThreadId
+            );
+            if (receiverThreadId && converted.receiver_thread_id === undefined) {
+                converted.receiver_thread_id = receiverThreadId;
+            }
+
+            const prompt = asString(record.prompt);
+            if (prompt && converted.prompt === undefined) {
+                converted.prompt = prompt;
             }
         }
 
@@ -674,6 +759,46 @@ export class AppServerEventConverter {
                     events.push({
                         type: 'todo_list',
                         items
+                    });
+                }
+
+                return events;
+            }
+
+            if (itemType === 'collabagenttoolcall') {
+                const action = asString(item.tool);
+                const senderThreadId = asString(item.senderThreadId ?? item.sender_thread_id);
+                const receiverThreadIds = Array.isArray(item.receiverThreadIds)
+                    ? item.receiverThreadIds
+                    : Array.isArray(item.receiver_thread_ids)
+                        ? item.receiver_thread_ids
+                        : [];
+                const prompt = asString(item.prompt);
+                const status = asString(item.status);
+                const agentsStates = asRecord(item.agentsStates ?? item.agents_states);
+
+                if (method === 'item/started') {
+                    events.push({
+                        type: 'collab_tool_call_begin',
+                        call_id: itemId,
+                        ...(action ? { action } : {}),
+                        ...(senderThreadId ? { sender_thread_id: senderThreadId } : {}),
+                        ...(receiverThreadIds.length > 0 ? { receiver_thread_ids: receiverThreadIds } : {}),
+                        ...(prompt ? { prompt } : {})
+                    });
+                }
+
+                if (method === 'item/completed') {
+                    events.push({
+                        type: 'collab_tool_call_end',
+                        call_id: itemId,
+                        ...(action ? { action } : {}),
+                        ...(senderThreadId ? { sender_thread_id: senderThreadId } : {}),
+                        ...(receiverThreadIds.length > 0 ? { receiver_thread_ids: receiverThreadIds } : {}),
+                        ...(prompt ? { prompt } : {}),
+                        ...(status ? { status } : {}),
+                        ...(agentsStates ? { agents_states: agentsStates } : {}),
+                        ...(status ? { success: status !== 'failed' } : {})
                     });
                 }
 

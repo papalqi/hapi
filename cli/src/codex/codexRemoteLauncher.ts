@@ -494,6 +494,101 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
             return false;
         };
 
+        const rawCollabActionByType: Record<string, string> = {
+            collab_agent_spawn_begin: 'spawnAgent',
+            collab_agent_spawn_end: 'spawnAgent',
+            collab_agent_interaction_begin: 'sendInput',
+            collab_agent_interaction_end: 'sendInput',
+            collab_waiting_begin: 'wait',
+            collab_waiting_end: 'wait',
+            collab_close_begin: 'closeAgent',
+            collab_close_end: 'closeAgent',
+            collab_resume_begin: 'resumeAgent',
+            collab_resume_end: 'resumeAgent'
+        };
+
+        const resolveCollabLifecycle = (
+            msgType: string,
+            msg: Record<string, unknown>
+        ): {
+            phase: 'begin' | 'end';
+            callId: string;
+            input: Record<string, unknown>;
+            output?: Record<string, unknown>;
+            action?: string;
+        } | null => {
+            const explicitPhase = msgType === 'collab_tool_call_begin'
+                ? 'begin'
+                : msgType === 'collab_tool_call_end'
+                    ? 'end'
+                    : null;
+            const rawPhase = msgType.endsWith('_begin')
+                ? 'begin'
+                : msgType.endsWith('_end')
+                    ? 'end'
+                    : null;
+            const phase = explicitPhase ?? rawPhase;
+            if (!phase) {
+                return null;
+            }
+
+            const callId = asString(msg.call_id ?? msg.callId ?? msg.id);
+            if (!callId) {
+                return null;
+            }
+
+            const action = asString(msg.action ?? msg.tool) ?? rawCollabActionByType[msgType];
+            const input: Record<string, unknown> = {};
+            if (action) input.action = action;
+
+            const senderThreadId = asString(msg.sender_thread_id ?? msg.senderThreadId);
+            if (senderThreadId) input.sender_thread_id = senderThreadId;
+
+            const receiverThreadIds = Array.isArray(msg.receiver_thread_ids)
+                ? msg.receiver_thread_ids
+                : Array.isArray(msg.receiverThreadIds)
+                    ? msg.receiverThreadIds
+                    : null;
+            if (receiverThreadIds && receiverThreadIds.length > 0) {
+                input.receiver_thread_ids = receiverThreadIds;
+            }
+
+            const receiverThreadId = asString(
+                msg.receiver_thread_id
+                ?? msg.receiverThreadId
+                ?? msg.new_thread_id
+                ?? msg.newThreadId
+            );
+            if (receiverThreadId) {
+                input.receiver_thread_id = receiverThreadId;
+            }
+
+            const prompt = asString(msg.prompt);
+            if (prompt) input.prompt = prompt;
+
+            const receiverNickname = asString(msg.receiver_agent_nickname ?? msg.receiverAgentNickname ?? msg.new_agent_nickname ?? msg.newAgentNickname);
+            if (receiverNickname) input.receiver_agent_nickname = receiverNickname;
+
+            const receiverRole = asString(msg.receiver_agent_role ?? msg.receiverAgentRole ?? msg.new_agent_role ?? msg.newAgentRole);
+            if (receiverRole) input.receiver_agent_role = receiverRole;
+
+            const output: Record<string, unknown> = {};
+            const status = msg.status;
+            if (status !== undefined) output.status = status;
+            if (msg.success !== undefined) output.success = msg.success;
+            if (msg.statuses !== undefined) output.statuses = msg.statuses;
+            if (msg.agent_statuses !== undefined) output.agent_statuses = msg.agent_statuses;
+            if (msg.agents_states !== undefined) output.agents_states = msg.agents_states;
+
+            return {
+                phase,
+                callId,
+                input,
+                ...(phase === 'end' ? { output } : {}),
+                ...(action ? { action } : {})
+            };
+        };
+
         const handleCodexEvent = (msg: Record<string, unknown>) => {
             const msgType = asString(msg.type);
             if (!msgType) return;
@@ -752,6 +847,35 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
                         id: randomUUID()
                     });
                 }
+            }
+            const collab = resolveCollabLifecycle(msgType, msg);
+            if (collab) {
+                if (collab.phase === 'begin') {
+                    messageBuffer.addMessage(
+                        `Sub-agent ${collab.action ?? 'operation'} started`,
+                        'tool'
+                    );
+                    session.sendCodexMessage({
+                        type: 'tool-call',
+                        name: 'CodexSubAgent',
+                        callId: collab.callId,
+                        input: collab.input,
+                        id: randomUUID()
+                    });
+                } else {
+                    const statusValue = asString(collab.output?.status);
+                    messageBuffer.addMessage(
+                        `Sub-agent ${collab.action ?? 'operation'} ${statusValue ?? 'completed'}`,
+                        'result'
+                    );
+                    session.sendCodexMessage({
+                        type: 'tool-call-result',
+                        callId: collab.callId,
+                        output: collab.output ?? {},
+                        id: randomUUID()
+                    });
+                }
+                return;
             }
             if (msgType === 'turn_diff') {
                 const diff = asString(msg.unified_diff);

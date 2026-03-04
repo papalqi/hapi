@@ -145,6 +145,92 @@ describe('AppServerEventConverter', () => {
         }]);
     });
 
+    it('unwraps collab lifecycle events from codex/event wrapper', () => {
+        const converter = new AppServerEventConverter();
+
+        const beginEvents = converter.handleNotification('codex/event/collab_agent_spawn_begin', {
+            msg: {
+                call_id: 'collab-1',
+                sender_thread_id: 'sender-1',
+                prompt: 'delegate task'
+            }
+        });
+        expect(beginEvents).toEqual([{
+            type: 'collab_tool_call_begin',
+            call_id: 'collab-1',
+            sender_thread_id: 'sender-1',
+            prompt: 'delegate task',
+            action: 'spawnAgent'
+        }]);
+
+        const endEvents = converter.handleNotification('codex/event/collab_agent_spawn_end', {
+            msg: {
+                call_id: 'collab-1',
+                sender_thread_id: 'sender-1',
+                new_thread_id: 'child-1',
+                status: 'running'
+            }
+        });
+        expect(endEvents).toEqual([{
+            type: 'collab_tool_call_end',
+            call_id: 'collab-1',
+            sender_thread_id: 'sender-1',
+            new_thread_id: 'child-1',
+            receiver_thread_id: 'child-1',
+            status: 'running',
+            action: 'spawnAgent'
+        }]);
+    });
+
+    it('maps collabAgentToolCall item lifecycle', () => {
+        const converter = new AppServerEventConverter();
+
+        const begin = converter.handleNotification('item/started', {
+            item: {
+                id: 'collab-item-1',
+                type: 'collabAgentToolCall',
+                tool: 'sendInput',
+                senderThreadId: 'sender-2',
+                receiverThreadIds: ['child-2'],
+                prompt: 'continue'
+            }
+        });
+        expect(begin).toEqual([{
+            type: 'collab_tool_call_begin',
+            call_id: 'collab-item-1',
+            action: 'sendInput',
+            sender_thread_id: 'sender-2',
+            receiver_thread_ids: ['child-2'],
+            prompt: 'continue'
+        }]);
+
+        const end = converter.handleNotification('item/completed', {
+            item: {
+                id: 'collab-item-1',
+                type: 'collabAgentToolCall',
+                tool: 'sendInput',
+                senderThreadId: 'sender-2',
+                receiverThreadIds: ['child-2'],
+                status: 'completed',
+                agentsStates: {
+                    'child-2': { status: 'running', message: null }
+                }
+            }
+        });
+        expect(end).toEqual([{
+            type: 'collab_tool_call_end',
+            call_id: 'collab-item-1',
+            action: 'sendInput',
+            sender_thread_id: 'sender-2',
+            receiver_thread_ids: ['child-2'],
+            status: 'completed',
+            agents_states: {
+                'child-2': { status: 'running', message: null }
+            },
+            success: true
+        }]);
+    });
+
     it('unwraps codex/event/error and codex/event/stream_error notifications', () => {
         const converter = new AppServerEventConverter();
 

@@ -130,6 +130,27 @@ export const knownTools: Record<string, {
         subtitle: (opts) => getInputStringAny(opts.input, ['message', 'command']) ?? null,
         minimal: true
     },
+    CodexSubAgent: {
+        icon: () => <PuzzleIcon className={DEFAULT_ICON_CLASS} />,
+        title: (opts) => {
+            const action = getInputStringAny(opts.input, ['action']) ?? getInputStringAny(opts.result, ['action'])
+            return action ? `Sub-agent: ${action}` : 'Sub-agent'
+        },
+        subtitle: (opts) => {
+            const receiverNickname = getInputStringAny(opts.input, ['receiver_agent_nickname'])
+            if (receiverNickname) return receiverNickname
+            const receiverThread = getInputStringAny(opts.input, ['receiver_thread_id'])
+            if (receiverThread) return receiverThread
+            const receivers = isObject(opts.input) && Array.isArray(opts.input.receiver_thread_ids)
+                ? opts.input.receiver_thread_ids
+                : null
+            if (receivers && receivers.length > 0) {
+                return `${receivers.length} receivers`
+            }
+            return null
+        },
+        minimal: true
+    },
     shell_command: {
         icon: () => <TerminalIcon className={DEFAULT_ICON_CLASS} />,
         title: (opts) => opts.description ?? 'Terminal',
