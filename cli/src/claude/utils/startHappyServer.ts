@@ -76,9 +76,10 @@ export async function startHappyServer(client: ApiSessionClient) {
     });
 
     const transport = new StreamableHTTPServerTransport({
-        // NOTE: Returning session id here will result in claude
-        // sdk spawn to fail with `Invalid Request: Server already initialized`
-        sessionIdGenerator: undefined
+        // Stateful transport is required for sdk >= 1.26 because
+        // stateless transports cannot be reused across multiple HTTP requests.
+        // Codex bridge keeps a single MCP client connection, so one session id is correct.
+        sessionIdGenerator: () => randomUUID()
     });
     await mcp.connect(transport);
 
