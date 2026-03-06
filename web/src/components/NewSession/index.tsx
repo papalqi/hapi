@@ -45,7 +45,7 @@ export function NewSession(props: {
     const [agent, setAgent] = useState<AgentType>(loadPreferredAgent)
     const [model, setModel] = useState('auto')
     const [reasoningEffort, setReasoningEffort] = useState('auto')
-    const [codexTransport, setCodexTransport] = useState<'auto' | 'app-server' | 'mcp' | 'sdk'>('auto')
+    const [codexTransport, setCodexTransport] = useState<'auto' | 'app-server' | 'mcp' | 'sdk'>('sdk')
     const [yoloMode, setYoloMode] = useState(loadPreferredYoloMode)
     const [sessionType, setSessionType] = useState<SessionType>('simple')
     const [worktreeName, setWorktreeName] = useState('')
@@ -92,7 +92,7 @@ export function NewSession(props: {
 
     useEffect(() => {
         if (agent !== 'codex') {
-            setCodexTransport('auto')
+            setCodexTransport('sdk')
         }
     }, [agent])
 
