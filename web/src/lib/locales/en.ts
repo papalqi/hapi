@@ -41,6 +41,9 @@ export default {
   // Sessions page
   'sessions.count': '{n} sessions across {m} machines',
   'sessions.new': 'New Session',
+  'sessions.selection.count': '{n} selected',
+  'sessions.selection.cancel': 'Clear',
+  'sessions.selection.delete': 'Delete Selected',
 
   // Session list
   'session.item.path': 'path',
@@ -80,6 +83,10 @@ export default {
   'dialog.delete.description': 'Are you sure you want to delete "{name}"? This action cannot be undone.',
   'dialog.delete.confirm': 'Delete',
   'dialog.delete.confirming': 'Deleting…',
+  'dialog.deleteMultiple.title': 'Delete Sessions',
+  'dialog.deleteMultiple.description': 'Are you sure you want to delete these {n} sessions? This action cannot be undone.',
+  'dialog.deleteMultiple.confirm': 'Delete Selected',
+  'dialog.deleteMultiple.confirming': 'Deleting…',
   'dialog.error.default': 'Operation failed. Please try again.',
 
   // Common buttons

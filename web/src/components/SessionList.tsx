@@ -8,6 +8,9 @@ import { SessionActionMenu } from '@/components/SessionActionMenu'
 import { RenameSessionDialog } from '@/components/RenameSessionDialog'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { useTranslation } from '@/lib/use-translation'
+import { useQueryClient } from '@tanstack/react-query'
+import { queryKeys } from '@/lib/query-keys'
+import { clearMessageWindow } from '@/lib/message-window-store'
 
 // --- 类型定义 ---
 
@@ -25,6 +28,12 @@ type MachineGroup = {
     directoryGroups: SessionGroup[]
     latestUpdatedAt: number
     hasActiveSession: boolean
+}
+
+type SessionSelectInfo = {
+    shiftKey: boolean
+    metaKey: boolean
+    ctrlKey: boolean
 }
 
 // --- 工具函数 ---
@@ -300,17 +309,38 @@ function formatRelativeTime(value: number, t: (key: string, params?: Record<stri
     return new Date(ms).toLocaleDateString()
 }
 
+function resolveSelectionRange(orderedIds: string[], fromId: string, toId: string): string[] {
+    const fromIndex = orderedIds.indexOf(fromId)
+    const toIndex = orderedIds.indexOf(toId)
+    if (fromIndex < 0 || toIndex < 0) {
+        return [toId]
+    }
+    const start = Math.min(fromIndex, toIndex)
+    const end = Math.max(fromIndex, toIndex)
+    return orderedIds.slice(start, end + 1)
+}
+
 // --- 会话条目组件 ---
 
 function SessionItem(props: {
     session: SessionSummary
-    onSelect: (sessionId: string) => void
+    onSelect: (sessionId: string, info?: SessionSelectInfo) => void
     showPath?: boolean
     api: ApiClient | null
     selected?: boolean
+    multiSelected?: boolean
+    selectionMode?: boolean
 }) {
     const { t } = useTranslation()
-    const { session: s, onSelect, showPath = true, api, selected = false } = props
+    const {
+        session: s,
+        onSelect,
+        showPath = true,
+        api,
+        selected = false,
+        multiSelected = false,
+        selectionMode = false
+    } = props
     const { haptic } = usePlatform()
     const [menuOpen, setMenuOpen] = useState(false)
     const [menuAnchorPoint, setMenuAnchorPoint] = useState<{ x: number; y: number }>({ x: 0, y: 0 })
@@ -330,12 +360,17 @@ function SessionItem(props: {
             setMenuAnchorPoint(point)
             setMenuOpen(true)
         },
-        onClick: () => {
+        onClick: (info) => {
             if (!menuOpen) {
-                onSelect(s.id)
+                onSelect(s.id, {
+                    shiftKey: info.shiftKey,
+                    metaKey: info.metaKey,
+                    ctrlKey: info.ctrlKey
+                })
             }
         },
-        threshold: 500
+        threshold: 500,
+        disabled: selectionMode
     })
 
     const sessionName = getSessionTitle(s)
@@ -346,12 +381,19 @@ function SessionItem(props: {
     const statusDotClass = s.active
         ? (s.thinking ? 'bg-[#007AFF]' : 'bg-[var(--app-badge-success-text)]')
         : 'bg-[var(--app-hint)]'
+    const highlighted = selected || multiSelected
+    const selectedClass = multiSelected
+        ? 'bg-[var(--app-secondary-bg)] ring-1 ring-[var(--app-link)]/35'
+        : highlighted
+            ? 'bg-[var(--app-secondary-bg)]'
+            : ''
+
     return (
         <>
             <button
                 type="button"
                 {...longPressHandlers}
-                className={`session-list-item flex w-full flex-col gap-1 px-3 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-link)] select-none ${selected ? 'bg-[var(--app-secondary-bg)]' : ''}`}
+                className={`session-list-item flex w-full flex-col gap-1 px-3 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-link)] select-none ${selectedClass}`}
                 style={{ WebkitTouchCallout: 'none' }}
                 aria-current={selected ? 'page' : undefined}
             >
@@ -531,10 +573,15 @@ export function SessionList(props: {
     selectedSessionId?: string | null
 }) {
     const { t } = useTranslation()
+    const queryClient = useQueryClient()
     const { renderHeader = true, api, selectedSessionId, machines = [] } = props
 
     const [editingMachineId, setEditingMachineId] = useState<string | null>(null)
     const [savingMachineId, setSavingMachineId] = useState<string | null>(null)
+    const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(() => new Set())
+    const [selectionAnchorId, setSelectionAnchorId] = useState<string | null>(null)
+    const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
+    const [bulkDeletePending, setBulkDeletePending] = useState(false)
 
     const handleSaveMachineName = (machineId: string, newName: string | null) => {
         if (!api) {
@@ -569,6 +616,15 @@ export function SessionList(props: {
     const machineGroups = useMemo(
         () => groupSessionsByMachine(props.sessions, machines, t),
         [props.sessions, machines, t]
+    )
+
+    const orderedSessionIds = useMemo(
+        () => machineGroups.flatMap((machineGroup) =>
+            machineGroup.directoryGroups.flatMap((dirGroup) =>
+                dirGroup.sessions.map((session) => session.id)
+            )
+        ),
+        [machineGroups]
     )
 
     // 折叠状态：分为机器级别和目录级别
@@ -626,11 +682,102 @@ export function SessionList(props: {
         })
     }, [machineGroups])
 
+    useEffect(() => {
+        const knownSessionIds = new Set(orderedSessionIds)
+        setSelectedSessionIds((prev) => {
+            if (prev.size === 0) return prev
+            const next = new Set<string>()
+            for (const id of prev) {
+                if (knownSessionIds.has(id)) {
+                    next.add(id)
+                }
+            }
+            if (next.size === prev.size) return prev
+            return next
+        })
+        setSelectionAnchorId((prev) => (prev && knownSessionIds.has(prev) ? prev : null))
+    }, [orderedSessionIds])
+
     const totalSessions = props.sessions.length
     const totalMachines = machineGroups.length
+    const selectedCount = selectedSessionIds.size
+    const selectionMode = selectedCount > 0
+
+    const clearSelection = () => {
+        setSelectedSessionIds(new Set())
+        setSelectionAnchorId(null)
+    }
+
+    const handleSessionSelect = (sessionId: string, info?: SessionSelectInfo) => {
+        const hasShift = Boolean(info?.shiftKey)
+        const hasToggle = Boolean(info?.metaKey || info?.ctrlKey)
+
+        if (!hasShift && !hasToggle && !selectionMode) {
+            props.onSelect(sessionId)
+            setSelectionAnchorId(sessionId)
+            return
+        }
+
+        setSelectedSessionIds((prev) => {
+            const next = new Set(prev)
+
+            if (hasShift) {
+                const anchorId = selectionAnchorId ?? sessionId
+                const rangeIds = resolveSelectionRange(orderedSessionIds, anchorId, sessionId)
+                if (hasToggle) {
+                    for (const id of rangeIds) {
+                        next.add(id)
+                    }
+                    return next
+                }
+                return new Set(rangeIds)
+            }
+
+            if (hasToggle || selectionMode) {
+                if (next.has(sessionId)) {
+                    next.delete(sessionId)
+                } else {
+                    next.add(sessionId)
+                }
+                return next
+            }
+
+            return next
+        })
+
+        setSelectionAnchorId(sessionId)
+    }
+
+    const handleBulkDeleteConfirm = async () => {
+        if (!api || selectedSessionIds.size === 0) {
+            setBulkDeleteOpen(false)
+            return
+        }
+
+        const deletingIds = Array.from(selectedSessionIds)
+        setBulkDeletePending(true)
+        try {
+            await Promise.all(deletingIds.map((id) => api.deleteSession(id)))
+            for (const id of deletingIds) {
+                queryClient.removeQueries({ queryKey: queryKeys.session(id) })
+                clearMessageWindow(id)
+            }
+            await queryClient.invalidateQueries({ queryKey: queryKeys.sessions })
+            clearSelection()
+            setBulkDeleteOpen(false)
+        } catch (error) {
+            if (import.meta.env.DEV) {
+                console.error('Failed to delete selected sessions:', error)
+            }
+            window.alert(t('dialog.error.default'))
+        } finally {
+            setBulkDeletePending(false)
+        }
+    }
 
     return (
-        <div className="mx-auto w-full max-w-content flex flex-col">
+        <>
+            <div className="mx-auto w-full max-w-content flex flex-col">
             {renderHeader ? (
                 <div className="flex items-center justify-between px-3 py-1">
                     <div className="text-xs text-[var(--app-hint)]">
@@ -644,6 +791,30 @@ export function SessionList(props: {
                     >
                         <PlusIcon className="h-5 w-5" />
                     </button>
+                </div>
+            ) : null}
+
+            {selectionMode ? (
+                <div className="sticky top-0 z-30 flex items-center justify-between gap-2 px-3 py-2 border-b border-[var(--app-divider)] bg-[var(--app-secondary-bg)]">
+                    <div className="text-xs font-medium text-[var(--app-fg)]">
+                        {t('sessions.selection.count', { n: selectedCount })}
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <button
+                            type="button"
+                            onClick={clearSelection}
+                            className="px-2 py-1 rounded text-xs text-[var(--app-hint)] hover:text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)] transition-colors"
+                        >
+                            {t('sessions.selection.cancel')}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setBulkDeleteOpen(true)}
+                            className="px-2 py-1 rounded text-xs text-[#E74C3C] hover:bg-[var(--app-subtle-bg)] transition-colors"
+                        >
+                            {t('sessions.selection.delete')}
+                        </button>
+                    </div>
                 </div>
             ) : null}
 
@@ -731,10 +902,12 @@ export function SessionList(props: {
                                                             <SessionItem
                                                                 key={s.id}
                                                                 session={s}
-                                                                onSelect={props.onSelect}
+                                                                onSelect={handleSessionSelect}
                                                                 showPath={false}
                                                                 api={api}
                                                                 selected={s.id === selectedSessionId}
+                                                                multiSelected={selectedSessionIds.has(s.id)}
+                                                                selectionMode={selectionMode}
                                                             />
                                                         ))}
                                                     </div>
@@ -748,6 +921,19 @@ export function SessionList(props: {
                     )
                 })}
             </div>
-        </div>
+            </div>
+
+            <ConfirmDialog
+                isOpen={bulkDeleteOpen}
+                onClose={() => setBulkDeleteOpen(false)}
+                title={t('dialog.deleteMultiple.title')}
+                description={t('dialog.deleteMultiple.description', { n: selectedCount })}
+                confirmLabel={t('dialog.deleteMultiple.confirm')}
+                confirmingLabel={t('dialog.deleteMultiple.confirming')}
+                onConfirm={handleBulkDeleteConfirm}
+                isPending={bulkDeletePending}
+                destructive
+            />
+        </>
     )
 }

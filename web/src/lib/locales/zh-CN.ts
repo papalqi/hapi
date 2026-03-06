@@ -41,6 +41,9 @@ export default {
   // Sessions page
   'sessions.count': '{n} 个会话，{m} 台机器',
   'sessions.new': '新建会话',
+  'sessions.selection.count': '已选 {n} 个会话',
+  'sessions.selection.cancel': '取消选择',
+  'sessions.selection.delete': '删除所选',
 
   // Session list
   'session.item.path': '路径',
@@ -82,6 +85,10 @@ export default {
   'dialog.delete.description': '确定要删除 "{name}" 吗？此操作无法撤销。',
   'dialog.delete.confirm': '删除',
   'dialog.delete.confirming': '删除中…',
+  'dialog.deleteMultiple.title': '批量删除会话',
+  'dialog.deleteMultiple.description': '确定要删除这 {n} 个会话吗？此操作无法撤销。',
+  'dialog.deleteMultiple.confirm': '删除所选',
+  'dialog.deleteMultiple.confirming': '删除中…',
   'dialog.error.default': '操作失败，请重试。',
 
   // Common buttons

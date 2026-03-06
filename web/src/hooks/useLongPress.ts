@@ -3,7 +3,12 @@ import { useCallback, useRef } from 'react'
 
 type UseLongPressOptions = {
     onLongPress: (point: { x: number; y: number }) => void
-    onClick?: () => void
+    onClick?: (info: {
+        shiftKey: boolean
+        metaKey: boolean
+        ctrlKey: boolean
+        source: 'mouse' | 'touch' | 'keyboard'
+    }) => void
     threshold?: number
     disabled?: boolean
 }
@@ -26,6 +31,17 @@ export function useLongPress(options: UseLongPressOptions): UseLongPressHandlers
     const isLongPressRef = useRef(false)
     const touchMoved = useRef(false)
     const pressPointRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 })
+    const clickInfoRef = useRef<{
+        shiftKey: boolean
+        metaKey: boolean
+        ctrlKey: boolean
+        source: 'mouse' | 'touch' | 'keyboard'
+    }>({
+        shiftKey: false,
+        metaKey: false,
+        ctrlKey: false,
+        source: 'mouse'
+    })
 
     const clearTimer = useCallback(() => {
         if (timerRef.current) {
@@ -52,7 +68,7 @@ export function useLongPress(options: UseLongPressOptions): UseLongPressHandlers
         clearTimer()
 
         if (shouldTriggerClick && !isLongPressRef.current && !touchMoved.current && onClick) {
-            onClick()
+            onClick(clickInfoRef.current)
         }
 
         isLongPressRef.current = false
@@ -61,6 +77,12 @@ export function useLongPress(options: UseLongPressOptions): UseLongPressHandlers
 
     const onMouseDown = useCallback<React.MouseEventHandler>((e) => {
         if (e.button !== 0) return
+        clickInfoRef.current = {
+            shiftKey: e.shiftKey,
+            metaKey: e.metaKey,
+            ctrlKey: e.ctrlKey,
+            source: 'mouse'
+        }
         startTimer(e.clientX, e.clientY)
     }, [startTimer])
 
@@ -74,6 +96,12 @@ export function useLongPress(options: UseLongPressOptions): UseLongPressHandlers
 
     const onTouchStart = useCallback<React.TouchEventHandler>((e) => {
         const touch = e.touches[0]
+        clickInfoRef.current = {
+            shiftKey: false,
+            metaKey: false,
+            ctrlKey: false,
+            source: 'touch'
+        }
         startTimer(touch.clientX, touch.clientY)
     }, [startTimer])
 
@@ -102,7 +130,12 @@ export function useLongPress(options: UseLongPressOptions): UseLongPressHandlers
         if (disabled) return
         if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault()
-            onClick?.()
+            onClick?.({
+                shiftKey: e.shiftKey,
+                metaKey: e.metaKey,
+                ctrlKey: e.ctrlKey,
+                source: 'keyboard'
+            })
         }
     }, [disabled, onClick])
 
