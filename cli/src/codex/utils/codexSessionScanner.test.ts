@@ -148,4 +148,49 @@ describe('codexSessionScanner', () => {
         await wait(200);
         expect(events).toHaveLength(0);
     });
+
+    it('matches an existing session file once it becomes active (auto-resume)', async () => {
+        const now = Date.now();
+        const sessionStartWindowMs = 2 * 60 * 1000;
+        const sessionId = 'session-auto-resume';
+        const cwd = '/data/github/happy/hapi';
+
+        const date = new Date(now);
+        const year = String(date.getFullYear());
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        const activeDir = join(testDir, 'sessions', year, month, day);
+        await mkdir(activeDir, { recursive: true });
+
+        const oldTimestamp = new Date(now - 60 * 60 * 1000).toISOString();
+        const filePath = join(activeDir, `rollout-${sessionId}.jsonl`);
+        await writeFile(
+            filePath,
+            [
+                JSON.stringify({ type: 'session_meta', payload: { id: sessionId, cwd, timestamp: oldTimestamp } }),
+                JSON.stringify({ type: 'event_msg', payload: { type: 'agent_message', message: 'old hello' } })
+            ].join('\n') + '\n'
+        );
+
+        scanner = await createCodexSessionScanner({
+            sessionId: null,
+            cwd,
+            startupTimestampMs: now,
+            sessionStartWindowMs,
+            onEvent: (event) => events.push(event)
+        });
+
+        await wait(150);
+        expect(events).toHaveLength(0);
+
+        const newLine = JSON.stringify({
+            type: 'response_item',
+            payload: { type: 'function_call', name: 'Tool', call_id: 'call-auto', arguments: '{}' }
+        });
+        await appendFile(filePath, newLine + '\n');
+
+        await wait(300);
+        expect(events).toHaveLength(1);
+        expect(events[0].type).toBe('response_item');
+    });
 });

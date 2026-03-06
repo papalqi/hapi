@@ -69,6 +69,7 @@ class CodexSessionScannerImpl extends BaseSessionScanner<CodexSessionEvent> {
     private readonly pendingEventsByFile = new Map<string, PendingEvents>();
     private readonly sessionMetaParsed = new Set<string>();
     private readonly fileEpochByPath = new Map<string, number>();
+    private readonly fileFirstActivityTimestampByPath = new Map<string, number>();
     private readonly targetCwd: string | null;
     private readonly referenceTimestampMs: number;
     private readonly sessionStartWindowMs: number;
@@ -118,6 +119,12 @@ class CodexSessionScannerImpl extends BaseSessionScanner<CodexSessionEvent> {
             if (!this.targetCwd) {
                 return false;
             }
+            const fileCwd = this.sessionCwdByFile.get(filePath);
+            if (fileCwd && fileCwd === this.targetCwd) {
+                // Watch same-cwd sessions even when session_meta timestamp is old or missing.
+                // Real-world case: Codex auto-resumes an existing session file and appends new events.
+                return true;
+            }
             return this.getCandidateForFile(filePath) !== null;
         }
         const fileSessionId = this.sessionIdByFile.get(filePath);
@@ -165,6 +172,9 @@ class CodexSessionScannerImpl extends BaseSessionScanner<CodexSessionEvent> {
         const fileSessionId = this.sessionIdByFile.get(filePath) ?? null;
 
         if (!this.activeSessionId && this.targetCwd) {
+            if (stats.newCount > 0 && !this.fileFirstActivityTimestampByPath.has(filePath)) {
+                this.fileFirstActivityTimestampByPath.set(filePath, Date.now());
+            }
             this.appendPendingEvents(filePath, stats.events, fileSessionId);
             const candidate = this.getCandidateForFile(filePath);
             if (candidate) {
@@ -302,7 +312,8 @@ class CodexSessionScannerImpl extends BaseSessionScanner<CodexSessionEvent> {
                         this.sessionCwdByFile.set(filePath, normalizedCwd);
                     }
                     const rawTimestamp = payload ? payload.timestamp : null;
-                    const sessionTimestamp = payload ? parseTimestamp(payload.timestamp) : null;
+                    // Codex versions differ: timestamp may live on payload.timestamp or the top-level event timestamp.
+                    const sessionTimestamp = parseTimestamp(payload?.timestamp ?? parsed.timestamp);
                     if (sessionTimestamp !== null) {
                         this.sessionTimestampByFile.set(filePath, sessionTimestamp);
                     }
@@ -332,18 +343,31 @@ class CodexSessionScannerImpl extends BaseSessionScanner<CodexSessionEvent> {
         }
 
         const sessionTimestamp = this.sessionTimestampByFile.get(filePath);
-        if (sessionTimestamp === undefined) {
+        const activityTimestamp = this.fileFirstActivityTimestampByPath.get(filePath);
+
+        // Prefer session_meta timestamp when it looks like a "new session" started after we launched.
+        // Fallback to "first activity seen" timestamp when Codex appends to an existing session file.
+        const candidateTimestamp = (() => {
+            if (sessionTimestamp !== undefined) {
+                const diff = sessionTimestamp - this.referenceTimestampMs;
+                if (diff >= 0 && diff <= this.sessionStartWindowMs) {
+                    return sessionTimestamp;
+                }
+            }
+            if (activityTimestamp !== undefined) {
+                const diff = activityTimestamp - this.referenceTimestampMs;
+                if (diff >= 0 && diff <= this.sessionStartWindowMs) {
+                    return activityTimestamp;
+                }
+            }
+            return null;
+        })();
+
+        if (candidateTimestamp === null) {
             return null;
         }
 
-        if (sessionTimestamp < this.referenceTimestampMs) {
-            return null;
-        }
-
-        const diff = sessionTimestamp - this.referenceTimestampMs;
-        if (diff > this.sessionStartWindowMs) {
-            return null;
-        }
+        const diff = candidateTimestamp - this.referenceTimestampMs;
 
         return {
             sessionId,
