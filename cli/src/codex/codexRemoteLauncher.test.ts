@@ -218,7 +218,8 @@ describe('codexRemoteLauncher', () => {
     });
 
     it('finishes a turn and emits ready when task lifecycle events omit turn_id', async () => {
-        delete process.env.CODEX_USE_MCP_SERVER;
+        process.env.CODEX_USE_SDK = '0';
+        process.env.CODEX_USE_MCP_SERVER = '0';
         const {
             session,
             sessionEvents,

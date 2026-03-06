@@ -31,13 +31,16 @@ type HappyServer = Awaited<ReturnType<typeof buildHapiMcpBridge>>['server'];
 type CodexRemoteTransport = 'app-server' | 'mcp' | 'sdk';
 
 function resolveTransport(): CodexRemoteTransport {
-    if (process.env.CODEX_USE_SDK === '1') {
-        return 'sdk';
-    }
     if (process.env.CODEX_USE_MCP_SERVER === '1') {
         return 'mcp';
     }
-    return 'app-server';
+    if (process.env.CODEX_USE_SDK === '1') {
+        return 'sdk';
+    }
+    if (process.env.CODEX_USE_SDK === '0' || process.env.CODEX_USE_MCP_SERVER === '0') {
+        return 'app-server';
+    }
+    return 'sdk';
 }
 
 class CodexRemoteLauncher extends RemoteLauncherBase {

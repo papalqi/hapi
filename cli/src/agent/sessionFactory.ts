@@ -46,13 +46,16 @@ export function buildMachineMetadata(): MachineMetadata {
 }
 
 function resolveCodexTransportFromEnv(): 'app-server' | 'mcp' | 'sdk' {
-    if (process.env.CODEX_USE_SDK === '1') {
-        return 'sdk'
-    }
     if (process.env.CODEX_USE_MCP_SERVER === '1') {
         return 'mcp'
     }
-    return 'app-server'
+    if (process.env.CODEX_USE_SDK === '1') {
+        return 'sdk'
+    }
+    if (process.env.CODEX_USE_SDK === '0' || process.env.CODEX_USE_MCP_SERVER === '0') {
+        return 'app-server'
+    }
+    return 'sdk'
 }
 
 export function buildSessionMetadata(options: {
