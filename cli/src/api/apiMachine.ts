@@ -12,6 +12,7 @@ import { RunnerStateSchema, MachineMetadataSchema } from './types'
 import { backoff } from '@/utils/time'
 import { RpcHandlerManager } from './rpc/RpcHandlerManager'
 import { registerCommonHandlers } from '../modules/common/registerCommonHandlers'
+import { registerUpdateToolHandlers } from '@/modules/machine/handlers/updateTools'
 import type { SpawnSessionOptions, SpawnSessionResult } from '../modules/common/rpcTypes'
 import { applyVersionedAck } from './versionedUpdate'
 
@@ -78,6 +79,7 @@ export class ApiMachineClient {
         })
 
         registerCommonHandlers(this.rpcHandlerManager, process.cwd())
+        registerUpdateToolHandlers(this.rpcHandlerManager)
 
         this.rpcHandlerManager.registerHandler<PathExistsRequest, PathExistsResponse>('path-exists', async (params) => {
             const rawPaths = Array.isArray(params?.paths) ? params.paths : []
