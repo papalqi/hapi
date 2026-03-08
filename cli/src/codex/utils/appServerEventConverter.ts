@@ -157,6 +157,45 @@ function extractChanges(value: unknown): Record<string, unknown> | null {
     return null;
 }
 
+function extractTextFromContent(value: unknown): string | null {
+    if (typeof value === 'string' && value.length > 0) {
+        return value;
+    }
+
+    if (!Array.isArray(value)) {
+        return null;
+    }
+
+    const parts = value
+        .map((entry) => asRecord(entry))
+        .filter((entry): entry is Record<string, unknown> => entry !== null)
+        .map((entry) => asString(entry.text ?? entry.value))
+        .filter((text): text is string => text !== null && text.length > 0);
+
+    if (parts.length === 0) {
+        return null;
+    }
+
+    return parts.join('');
+}
+
+function extractSummaryText(value: unknown): string | null {
+    if (typeof value === 'string' && value.length > 0) {
+        return value;
+    }
+
+    if (!Array.isArray(value)) {
+        return null;
+    }
+
+    const parts = value.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0);
+    if (parts.length === 0) {
+        return null;
+    }
+
+    return parts.join('\n');
+}
+
 function normalizeRawType(value: string): string {
     return value
         .trim()
@@ -320,9 +359,40 @@ export class AppServerEventConverter {
         }
 
         const suffix = method.startsWith('codex/event/') ? method.slice('codex/event/'.length) : null;
+        const normalizedSuffix = typeof suffix === 'string'
+            ? suffix.trim().toLowerCase().replace(/[\s-]+/g, '_')
+            : null;
         const wrapped = asRecord(paramsRecord.msg ?? paramsRecord.event ?? paramsRecord.payload ?? paramsRecord.data);
 
         if (wrapped) {
+            if (normalizedSuffix === 'agent_message_content_delta') {
+                return this.handleNotification('item/agentMessage/delta', wrapped);
+            }
+
+            if (normalizedSuffix === 'agent_message_delta') {
+                const delta = asString(wrapped.delta);
+                return delta ? [{ type: 'agent_message_delta', delta }] : [];
+            }
+
+            if (normalizedSuffix === 'reasoning_content_delta') {
+                // Newer Codex app-server versions emit both `codex/event/reasoning_content_delta`
+                // and `item/reasoning/summaryTextDelta`. Prefer the latter to avoid double-counting
+                // deltas when both are present.
+                return [];
+            }
+
+            if (normalizedSuffix === 'item_started') {
+                return this.handleNotification('item/started', wrapped);
+            }
+
+            if (normalizedSuffix === 'item_updated') {
+                return this.handleNotification('item/updated', wrapped);
+            }
+
+            if (normalizedSuffix === 'item_completed') {
+                return this.handleNotification('item/completed', wrapped);
+            }
+
             const nestedWrapped = asRecord(wrapped.msg);
             if (nestedWrapped) {
                 const nestedEvents = this.convertDirectEventRecord(nestedWrapped);
@@ -603,11 +673,23 @@ export class AppServerEventConverter {
             if (itemId && delta) {
                 const prev = this.agentMessageBuffers.get(itemId) ?? '';
                 this.agentMessageBuffers.set(itemId, prev + delta);
+                events.push({ type: 'agent_message_delta', delta });
             }
             return events;
         }
 
         if (method === 'item/reasoning/textDelta') {
+            const itemId = extractItemId(paramsRecord) ?? 'reasoning';
+            const delta = asString(paramsRecord.delta ?? paramsRecord.text ?? paramsRecord.message);
+            if (delta) {
+                const prev = this.reasoningBuffers.get(itemId) ?? '';
+                this.reasoningBuffers.set(itemId, prev + delta);
+                events.push({ type: 'agent_reasoning_delta', delta });
+            }
+            return events;
+        }
+
+        if (method === 'item/reasoning/summaryTextDelta') {
             const itemId = extractItemId(paramsRecord) ?? 'reasoning';
             const delta = asString(paramsRecord.delta ?? paramsRecord.text ?? paramsRecord.message);
             if (delta) {
@@ -629,6 +711,7 @@ export class AppServerEventConverter {
             if (itemId && delta) {
                 const prev = this.commandOutputBuffers.get(itemId) ?? '';
                 this.commandOutputBuffers.set(itemId, prev + delta);
+                events.push({ type: 'exec_command_output_delta', delta });
             }
             return events;
         }
@@ -644,9 +727,15 @@ export class AppServerEventConverter {
                 return events;
             }
 
+            if (itemType === 'usermessage') {
+                return events;
+            }
+
             if (itemType === 'agentmessage') {
                 if (method === 'item/completed') {
-                    const text = asString(item.text ?? item.message ?? item.content) ?? this.agentMessageBuffers.get(itemId);
+                    const text = asString(item.text ?? item.message)
+                        ?? extractTextFromContent(item.content)
+                        ?? this.agentMessageBuffers.get(itemId);
                     if (text) {
                         events.push({ type: 'agent_message', message: text });
                     }
@@ -657,7 +746,10 @@ export class AppServerEventConverter {
 
             if (itemType === 'reasoning') {
                 if (method === 'item/completed') {
-                    const text = asString(item.text ?? item.message ?? item.content) ?? this.reasoningBuffers.get(itemId);
+                    const text = asString(item.text ?? item.message)
+                        ?? extractSummaryText(item.summary_text ?? item.summaryText ?? item.summary)
+                        ?? extractTextFromContent(item.content)
+                        ?? this.reasoningBuffers.get(itemId);
                     if (text) {
                         events.push({ type: 'agent_reasoning', text });
                     }

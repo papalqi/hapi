@@ -119,6 +119,54 @@ describe('AppServerEventConverter', () => {
         expect(events).toEqual([{ type: 'agent_message', message: 'hello from wrapper' }]);
     });
 
+    it('unwraps codex/event/item_completed AgentMessage notifications with content arrays', () => {
+        const converter = new AppServerEventConverter();
+
+        const events = converter.handleNotification('codex/event/item_completed', {
+            msg: {
+                type: 'item_completed',
+                item: {
+                    id: 'msg-2',
+                    type: 'AgentMessage',
+                    content: [{ type: 'Text', text: 'hi' }]
+                }
+            }
+        });
+
+        expect(events).toEqual([{ type: 'agent_message', message: 'hi' }]);
+    });
+
+    it('unwraps codex/event/item_completed Reasoning notifications with summary_text arrays', () => {
+        const converter = new AppServerEventConverter();
+
+        const events = converter.handleNotification('codex/event/item_completed', {
+            msg: {
+                type: 'item_completed',
+                item: {
+                    id: 'r2',
+                    type: 'Reasoning',
+                    summary_text: ['one', 'two']
+                }
+            }
+        });
+
+        expect(events).toEqual([{ type: 'agent_reasoning', text: 'one\ntwo' }]);
+    });
+
+    it('unwraps codex/event/agent_message_content_delta notifications into agent_message_delta', () => {
+        const converter = new AppServerEventConverter();
+
+        const events = converter.handleNotification('codex/event/agent_message_content_delta', {
+            msg: {
+                type: 'agent_message_content_delta',
+                item_id: 'msg-3',
+                delta: 'yo'
+            }
+        });
+
+        expect(events).toEqual([{ type: 'agent_message_delta', delta: 'yo' }]);
+    });
+
     it('unwraps codex/event/task/started notifications', () => {
         const converter = new AppServerEventConverter();
 
