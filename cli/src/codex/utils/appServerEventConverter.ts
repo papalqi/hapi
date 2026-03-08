@@ -74,6 +74,32 @@ const DIRECT_EVENT_TYPES = new Set<string>([
     'collab_tool_call_end'
 ]);
 
+// Codex app-server can emit both:
+// - legacy MCP-style notifications (item/*, thread/tokenUsage/updated, ...)
+// - new codex/event/* notifications
+//
+// When both streams are present, they describe the same payload and can create
+// duplicated transcript messages (especially agent_message + token_count).
+// Once we detect codex/event/*, prefer that stream and drop legacy duplicates.
+const LEGACY_METHODS_WHEN_CODEX_EVENT_PRESENT = new Set<string>([
+    'thread/started',
+    'thread/resumed',
+    'turn/started',
+    'turn/completed',
+    'thread/status/changed',
+    'thread/tokenusage/updated',
+    'todo/list/updated',
+    'item/agentmessage/delta',
+    'item/reasoning/textdelta',
+    'item/reasoning/summarypartadded',
+    'item/commandexecution/outputdelta',
+    'item/started',
+    'item/updated',
+    'item/completed',
+    'error',
+    'stream_error'
+]);
+
 function normalizeDirectEventType(value: string): string | null {
     const normalized = value
         .trim()
@@ -233,6 +259,7 @@ export class AppServerEventConverter {
     private readonly commandMeta = new Map<string, Record<string, unknown>>();
     private readonly fileChangeMeta = new Map<string, Record<string, unknown>>();
     private readonly unhandledMethods = new Map<string, { lastLoggedAt: number; suppressed: number }>();
+    private hasCodexEventStream = false;
     private static readonly UNHANDLED_LOG_INTERVAL_MS = 30_000;
 
     private convertDirectEventRecord(record: Record<string, unknown>, typeHint?: string): ConvertedEvent[] {
@@ -366,7 +393,7 @@ export class AppServerEventConverter {
 
         if (wrapped) {
             if (normalizedSuffix === 'agent_message_content_delta') {
-                return this.handleNotification('item/agentMessage/delta', wrapped);
+                return this.handleNotificationInternal('item/agentMessage/delta', wrapped, true);
             }
 
             if (normalizedSuffix === 'agent_message_delta') {
@@ -382,15 +409,15 @@ export class AppServerEventConverter {
             }
 
             if (normalizedSuffix === 'item_started') {
-                return this.handleNotification('item/started', wrapped);
+                return this.handleNotificationInternal('item/started', wrapped, true);
             }
 
             if (normalizedSuffix === 'item_updated') {
-                return this.handleNotification('item/updated', wrapped);
+                return this.handleNotificationInternal('item/updated', wrapped, true);
             }
 
             if (normalizedSuffix === 'item_completed') {
-                return this.handleNotification('item/completed', wrapped);
+                return this.handleNotificationInternal('item/completed', wrapped, true);
             }
 
             const nestedWrapped = asRecord(wrapped.msg);
@@ -404,7 +431,7 @@ export class AppServerEventConverter {
             const nestedMethod = asString(wrapped.method ?? wrapped.notification ?? wrapped.name);
             if (nestedMethod && nestedMethod !== method) {
                 const nestedParams = asRecord(wrapped.params ?? wrapped.payload ?? wrapped.data) ?? wrapped;
-                return this.handleNotification(nestedMethod, nestedParams);
+                return this.handleNotificationInternal(nestedMethod, nestedParams, true);
             }
 
             if (suffix && suffix.includes('/')) {
@@ -414,7 +441,7 @@ export class AppServerEventConverter {
                     return directEvents;
                 }
 
-                const nestedEvents = this.handleNotification(suffix, nestedParams);
+                const nestedEvents = this.handleNotificationInternal(suffix, nestedParams, true);
                 if (nestedEvents.length > 0) {
                     return nestedEvents;
                 }
@@ -433,7 +460,7 @@ export class AppServerEventConverter {
                 return directEvents;
             }
 
-            const nestedEvents = this.handleNotification(suffix, nestedParams);
+            const nestedEvents = this.handleNotificationInternal(suffix, nestedParams, true);
             if (nestedEvents.length > 0) {
                 return nestedEvents;
             }
@@ -548,10 +575,20 @@ export class AppServerEventConverter {
         });
     }
 
-    handleNotification(method: string, params: unknown): ConvertedEvent[] {
+    private handleNotificationInternal(method: string, params: unknown, allowLegacyFallback: boolean): ConvertedEvent[] {
         const events: ConvertedEvent[] = [];
         const paramsRecord = asRecord(params) ?? {};
         const normalizedMethod = method.toLowerCase();
+
+        if (normalizedMethod === 'codex/event' || normalizedMethod.startsWith('codex/event/')) {
+            this.hasCodexEventStream = true;
+        } else if (
+            !allowLegacyFallback
+            && this.hasCodexEventStream
+            && LEGACY_METHODS_WHEN_CODEX_EVENT_PRESENT.has(normalizedMethod)
+        ) {
+            return events;
+        }
 
         const wrappedEvents = this.handleCodexWrappedNotification(method, paramsRecord);
         if (wrappedEvents !== null) {
@@ -900,6 +937,10 @@ export class AppServerEventConverter {
 
         this.logUnhandled(method, params);
         return events;
+    }
+
+    handleNotification(method: string, params: unknown): ConvertedEvent[] {
+        return this.handleNotificationInternal(method, params, false);
     }
 
     reset(): void {

@@ -177,6 +177,45 @@ describe('AppServerEventConverter', () => {
         expect(events).toEqual([{ type: 'task_started', turn_id: 'turn-42' }]);
     });
 
+    it('prefers codex/event stream and ignores legacy duplicate notifications', () => {
+        const converter = new AppServerEventConverter();
+
+        const wrappedMessage = converter.handleNotification('codex/event/agent_message', {
+            msg: { type: 'agent_message', message: 'new stream message' }
+        });
+        expect(wrappedMessage).toEqual([{ type: 'agent_message', message: 'new stream message' }]);
+
+        converter.handleNotification('item/agentMessage/delta', { itemId: 'msg-legacy', delta: 'legacy ' });
+        const legacyCompleted = converter.handleNotification('item/completed', {
+            item: { id: 'msg-legacy', type: 'agentMessage' }
+        });
+        expect(legacyCompleted).toEqual([]);
+
+        const wrappedTokenCount = converter.handleNotification('codex/event/token_count', {
+            msg: {
+                type: 'token_count',
+                info: {
+                    total: { totalTokens: 123 },
+                    last: { totalTokens: 12 }
+                }
+            }
+        });
+        expect(wrappedTokenCount).toEqual([{
+            type: 'token_count',
+            info: {
+                total: { totalTokens: 123 },
+                last: { totalTokens: 12 }
+            }
+        }]);
+
+        const legacyTokenCount = converter.handleNotification('thread/tokenUsage/updated', {
+            tokenUsage: {
+                total_token_usage: { total_tokens: 999 }
+            }
+        });
+        expect(legacyTokenCount).toEqual([]);
+    });
+
     it('unwraps codex/event/plan notifications into todo_list', () => {
         const converter = new AppServerEventConverter();
 
