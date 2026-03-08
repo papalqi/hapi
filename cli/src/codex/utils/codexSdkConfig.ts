@@ -2,10 +2,50 @@ import type { EnhancedMode } from '../loop';
 import type { CodexCliOverrides } from './codexCliOverrides';
 import type { McpServersConfig } from './buildHapiMcpBridge';
 import { codexSystemPrompt } from './systemPrompt';
+import { existsSync } from 'node:fs';
+import { delimiter, join } from 'node:path';
 
 type CodexApprovalPolicy = 'never' | 'on-request' | 'on-failure' | 'untrusted';
 type CodexSandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
 type CodexReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+
+function resolveCodexPathOverride(): string | undefined {
+    const envOverride = typeof process.env.HAPI_CODEX_PATH === 'string'
+        ? process.env.HAPI_CODEX_PATH.trim()
+        : '';
+    if (envOverride.length > 0) {
+        return envOverride;
+    }
+
+    const pathEnv = typeof process.env.PATH === 'string' ? process.env.PATH : '';
+    if (pathEnv.length === 0) {
+        // Keep prior behavior on Windows: the global shim is typically `codex.cmd`.
+        return process.platform === 'win32' ? 'codex.cmd' : undefined;
+    }
+
+    const candidates = process.platform === 'win32'
+        ? ['codex.cmd', 'codex.exe', 'codex.bat', 'codex']
+        : ['codex'];
+
+    for (const entry of pathEnv.split(delimiter)) {
+        const dir = entry.trim();
+        if (dir.length === 0) continue;
+
+        for (const candidateName of candidates) {
+            const candidatePath = join(dir, candidateName);
+            if (existsSync(candidatePath)) {
+                return candidatePath;
+            }
+        }
+    }
+
+    if (process.platform === 'win32') {
+        return 'codex.cmd';
+    }
+
+    // Non-Windows: fall back to Codex SDK's vendor discovery (via @openai/codex optional deps).
+    return undefined;
+}
 
 function resolveApprovalPolicy(mode: EnhancedMode): CodexApprovalPolicy {
     switch (mode.permissionMode) {
@@ -98,11 +138,10 @@ export function buildCodexSdkOptions(args: {
         config.collaboration_mode = collaborationMode;
     }
 
+    const codexPathOverride = resolveCodexPathOverride();
+
     return {
-        // On Windows, Codex SDK's default binary discovery relies on @openai/codex optional deps
-        // that may be unavailable in compiled single-file distributions.
-        // Point explicitly to the globally installed CLI shim instead.
-        ...(process.platform === 'win32' ? { codexPathOverride: 'codex.cmd' } : {}),
+        ...(codexPathOverride ? { codexPathOverride } : {}),
         config
     };
 }

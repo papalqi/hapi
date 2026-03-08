@@ -75,7 +75,12 @@ export class CodexAppServerClient {
             return;
         }
 
-        this.process = spawn('codex', ['app-server'], {
+        const codexPathOverride = typeof process.env.HAPI_CODEX_PATH === 'string'
+            ? process.env.HAPI_CODEX_PATH.trim()
+            : '';
+        const codexPath = codexPathOverride.length > 0 ? codexPathOverride : 'codex';
+
+        this.process = spawn(codexPath, ['app-server'], {
             env: Object.keys(process.env).reduce((acc, key) => {
                 const value = process.env[key];
                 if (typeof value === 'string') acc[key] = value;
@@ -109,7 +114,7 @@ export class CodexAppServerClient {
             logger.debug('[CodexAppServer] Process error', error);
             const message = error instanceof Error ? error.message : String(error);
             this.rejectAllPending(new Error(
-                `Failed to spawn codex app-server: ${message}. Is it installed and on PATH?`,
+                `Failed to spawn codex app-server: ${message}. Is it installed and on PATH (or set HAPI_CODEX_PATH)?`,
                 { cause: error }
             ));
             this.connected = false;

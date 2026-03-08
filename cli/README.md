@@ -77,6 +77,7 @@ See `src/configuration.ts` for all options.
 - `HAPI_HOME` - Config/data directory (default: ~/.hapi).
 - `HAPI_EXPERIMENTAL` - Enable experimental features (true/1/yes).
 - `HAPI_CLAUDE_PATH` - Path to a specific `claude` executable.
+- `HAPI_CODEX_PATH` - Path to a specific `codex` executable (or shim).
 - `HAPI_HTTP_MCP_URL` - Default MCP target for `hapi mcp`.
 - `CODEX_USE_SDK` - Use Codex SDK transport in Codex remote mode when set to `1`.
 - `CODEX_USE_MCP_SERVER` - Use Codex MCP transport in Codex remote mode when set to `1` (ignored if `CODEX_USE_SDK=1`).
