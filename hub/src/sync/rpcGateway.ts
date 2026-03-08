@@ -234,15 +234,19 @@ export class RpcGateway {
         }
     }
 
-    private async sessionRpc(sessionId: string, method: string, params: unknown): Promise<unknown> {
-        return await this.rpcCall(`${sessionId}:${method}`, params)
+    async updateMachineTool(machineId: string, tool: 'hapi' | 'codex' | 'claude'): Promise<RpcCommandResponse> {
+        return await this.machineRpc(machineId, 'update-tool', { tool }, 15 * 60_000) as RpcCommandResponse
     }
 
-    private async machineRpc(machineId: string, method: string, params: unknown): Promise<unknown> {
-        return await this.rpcCall(`${machineId}:${method}`, params)
+    private async sessionRpc(sessionId: string, method: string, params: unknown, timeoutMs: number = 30_000): Promise<unknown> {
+        return await this.rpcCall(`${sessionId}:${method}`, params, timeoutMs)
     }
 
-    private async rpcCall(method: string, params: unknown): Promise<unknown> {
+    private async machineRpc(machineId: string, method: string, params: unknown, timeoutMs: number = 30_000): Promise<unknown> {
+        return await this.rpcCall(`${machineId}:${method}`, params, timeoutMs)
+    }
+
+    private async rpcCall(method: string, params: unknown, timeoutMs: number): Promise<unknown> {
         const socketId = this.rpcRegistry.getSocketIdForMethod(method)
         if (!socketId) {
             throw new Error(`RPC handler not registered: ${method}`)
@@ -253,7 +257,7 @@ export class RpcGateway {
             throw new Error(`RPC socket disconnected: ${method}`)
         }
 
-        const response = await socket.timeout(30_000).emitWithAck('rpc-request', {
+        const response = await socket.timeout(timeoutMs).emitWithAck('rpc-request', {
             method,
             params: JSON.stringify(params)
         }) as unknown

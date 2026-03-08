@@ -453,6 +453,10 @@ export class SyncEngine {
         return await this.rpcGateway.checkPathsExist(machineId, paths)
     }
 
+    async updateMachineTool(machineId: string, tool: 'hapi' | 'codex' | 'claude'): Promise<RpcCommandResponse> {
+        return await this.rpcGateway.updateMachineTool(machineId, tool)
+    }
+
     async getGitStatus(sessionId: string, cwd?: string): Promise<RpcCommandResponse> {
         return await this.rpcGateway.getGitStatus(sessionId, cwd)
     }

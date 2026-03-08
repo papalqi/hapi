@@ -23,6 +23,10 @@ const renameMachineSchema = z.object({
     displayName: z.string().max(255).nullable()
 })
 
+const updateToolSchema = z.object({
+    tool: z.enum(['hapi', 'codex', 'claude'])
+})
+
 export function createMachinesRoutes(getSyncEngine: () => SyncEngine | null): Hono<WebAppEnv> {
     const app = new Hono<WebAppEnv>()
 
@@ -138,6 +142,36 @@ export function createMachinesRoutes(getSyncEngine: () => SyncEngine | null): Ho
                 return c.json({ error: message }, 404)
             }
             return c.json({ error: message }, 500)
+        }
+    })
+
+    app.post('/machines/:id/update', async (c) => {
+        const engine = getSyncEngine()
+        if (!engine) {
+            return c.json({ error: 'Not connected' }, 503)
+        }
+
+        const machineId = c.req.param('id')
+        const machine = requireMachine(c, engine, machineId)
+        if (machine instanceof Response) {
+            return machine
+        }
+
+        if (!machine.active) {
+            return c.json({ error: 'Machine is offline' }, 409)
+        }
+
+        const body = await c.req.json().catch(() => null)
+        const parsed = updateToolSchema.safeParse(body)
+        if (!parsed.success) {
+            return c.json({ error: 'Invalid body' }, 400)
+        }
+
+        try {
+            const result = await engine.updateMachineTool(machineId, parsed.data.tool)
+            return c.json(result)
+        } catch (error) {
+            return c.json({ error: error instanceof Error ? error.message : 'Failed to update tool' }, 500)
         }
     })
 
