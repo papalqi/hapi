@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type SyntheticEvent } from 'react'
 import type { SessionSummary, Machine } from '@/types/api'
 import type { ApiClient } from '@/api/client'
 import { useLongPress } from '@/hooks/useLongPress'
 import { usePlatform } from '@/hooks/usePlatform'
 import { useSessionActions } from '@/hooks/mutations/useSessionActions'
 import { SessionActionMenu } from '@/components/SessionActionMenu'
+import { MachineActionMenu } from '@/components/MachineActionMenu'
 import { RenameSessionDialog } from '@/components/RenameSessionDialog'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { useTranslation } from '@/lib/use-translation'
@@ -524,7 +525,15 @@ function MachineNameEditor(props: {
     }
 
     return (
-        <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+        <div
+            className="flex items-center gap-1.5"
+            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+            onMouseUp={(e) => e.stopPropagation()}
+            onTouchStart={(e) => e.stopPropagation()}
+            onTouchEnd={(e) => e.stopPropagation()}
+            onContextMenu={(e) => e.stopPropagation()}
+        >
             <input
                 type="text"
                 value={value}
@@ -559,6 +568,106 @@ function MachineNameEditor(props: {
     )
 }
 
+// --- 机器分组头部组件（支持长按菜单） ---
+
+function MachineGroupHeader(props: {
+    machineGroup: MachineGroup
+    machineCollapsed: boolean
+    machineOnline: boolean
+    menuDisabled: boolean
+    renameDisabled: boolean
+    editingMachineId: string | null
+    savingMachineId: string | null
+    onToggleCollapse: () => void
+    onStartRename: () => void
+    onSaveMachineName: (machineId: string, newName: string | null) => void
+    onCancelRename: () => void
+    onOpenMenu: (point: { x: number; y: number }) => void
+}) {
+    const { t } = useTranslation()
+    const { haptic } = usePlatform()
+    const {
+        machineGroup,
+        machineCollapsed,
+        machineOnline,
+        menuDisabled,
+        renameDisabled,
+        editingMachineId,
+        savingMachineId,
+        onToggleCollapse,
+        onStartRename,
+        onSaveMachineName,
+        onCancelRename,
+        onOpenMenu
+    } = props
+
+    const stopPropagation = (e: SyntheticEvent) => {
+        e.stopPropagation()
+    }
+
+    const longPressHandlers = useLongPress({
+        onLongPress: (point) => {
+            haptic.impact('medium')
+            onOpenMenu(point)
+        },
+        onClick: onToggleCollapse,
+        threshold: 500,
+        disabled: menuDisabled
+    })
+
+    return (
+        <button
+            type="button"
+            {...longPressHandlers}
+            className="sticky top-0 z-20 flex w-full items-center gap-2 px-3 py-2.5 text-left bg-[var(--app-bg)] border-b border-[var(--app-divider)] transition-colors hover:bg-[var(--app-secondary-bg)]"
+        >
+            <ChevronIcon
+                className="h-4 w-4 text-[var(--app-hint)]"
+                collapsed={machineCollapsed}
+            />
+            <ComputerIcon className="h-4.5 w-4.5 text-[var(--app-link)]" />
+            <div className="flex items-center gap-2 min-w-0 flex-1">
+                {editingMachineId === machineGroup.machineId ? (
+                    <MachineNameEditor
+                        machineId={machineGroup.machineId}
+                        currentName={machineGroup.machineName}
+                        onSave={onSaveMachineName}
+                        onCancel={onCancelRename}
+                        isSaving={savingMachineId === machineGroup.machineId}
+                    />
+                ) : (
+                    <>
+                        <span className="font-semibold text-lg break-words" title={machineGroup.machineId}>
+                            {machineGroup.machineName}
+                        </span>
+                        <button
+                            type="button"
+                            onClick={(e) => {
+                                e.stopPropagation()
+                                if (renameDisabled) return
+                                onStartRename()
+                            }}
+                            onMouseDown={stopPropagation}
+                            onMouseUp={stopPropagation}
+                            onTouchStart={stopPropagation}
+                            onTouchEnd={stopPropagation}
+                            onContextMenu={stopPropagation}
+                            className="p-0.5 rounded hover:bg-[var(--app-subtle-bg)] text-[var(--app-hint)] hover:text-[var(--app-fg)] opacity-100 transition-opacity"
+                            title={machineOnline ? t('machine.rename') : t('machine.renameOnlineOnly')}
+                            disabled={renameDisabled}
+                        >
+                            <EditIcon />
+                        </button>
+                        <span className="shrink-0 text-xs text-[var(--app-hint)]">
+                            ({machineGroup.directoryGroups.reduce((sum, g) => sum + g.sessions.length, 0)})
+                        </span>
+                    </>
+                )}
+            </div>
+        </button>
+    )
+}
+
 // --- 主组件 ---
 
 export function SessionList(props: {
@@ -578,10 +687,19 @@ export function SessionList(props: {
 
     const [editingMachineId, setEditingMachineId] = useState<string | null>(null)
     const [savingMachineId, setSavingMachineId] = useState<string | null>(null)
+
+    // Session multi-select (shift/ctrl/cmd)
     const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(() => new Set())
     const [selectionAnchorId, setSelectionAnchorId] = useState<string | null>(null)
     const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
     const [bulkDeletePending, setBulkDeletePending] = useState(false)
+
+    // Machine long-press menu (update tools)
+    const [machineMenuOpen, setMachineMenuOpen] = useState(false)
+    const [machineMenuMachineId, setMachineMenuMachineId] = useState<string | null>(null)
+    const [machineMenuAnchorPoint, setMachineMenuAnchorPoint] = useState<{ x: number; y: number }>({ x: 0, y: 0 })
+    const [updateDialog, setUpdateDialog] = useState<{ machineId: string; tool: 'hapi' | 'codex' | 'claude' } | null>(null)
+    const [updatePending, setUpdatePending] = useState(false)
 
     const handleSaveMachineName = (machineId: string, newName: string | null) => {
         if (!api) {
@@ -610,6 +728,49 @@ export function SessionList(props: {
             .finally(() => {
                 setSavingMachineId(null)
             })
+    }
+
+    const openMachineMenu = (machineId: string, point: { x: number; y: number }) => {
+        setMachineMenuMachineId(machineId)
+        setMachineMenuAnchorPoint(point)
+        setMachineMenuOpen(true)
+    }
+
+    const requestUpdate = (tool: 'hapi' | 'codex' | 'claude') => {
+        if (!machineMenuMachineId) {
+            return
+        }
+        setUpdateDialog({ machineId: machineMenuMachineId, tool })
+    }
+
+    const updateToolLabel = (tool: 'hapi' | 'codex' | 'claude'): string => {
+        if (tool === 'hapi') return 'HAPI'
+        if (tool === 'codex') return 'Codex'
+        return 'Claude'
+    }
+
+    const runUpdate = async (): Promise<void> => {
+        if (!api || !updateDialog) {
+            return
+        }
+
+        const { machineId, tool } = updateDialog
+        const machineOnline = machines.some((machine) => machine.id === machineId)
+        if (!machineOnline) {
+            throw new Error(t('machine.updateOnlineOnly'))
+        }
+
+        setUpdatePending(true)
+        try {
+            const result = await api.updateMachineTool(machineId, tool)
+            if (!result.success) {
+                throw new Error(result.error || t('machine.update.failed', { tool: updateToolLabel(tool) }))
+            }
+
+            window.alert(t('machine.update.success', { tool: updateToolLabel(tool) }))
+        } finally {
+            setUpdatePending(false)
+        }
     }
 
     // 按机器分一级分组，再按目录分二级分组
@@ -826,50 +987,20 @@ export function SessionList(props: {
                     return (
                         <div key={machineGroup.machineId}>
                             {/* 一级分类：机器 */}
-                            <button
-                                type="button"
-                                onClick={() => toggleMachine(machineGroup.machineId, machineCollapsed)}
-                                className="sticky top-0 z-20 flex w-full items-center gap-2 px-3 py-2.5 text-left bg-[var(--app-bg)] border-b border-[var(--app-divider)] transition-colors hover:bg-[var(--app-secondary-bg)]"
-                            >
-                                <ChevronIcon
-                                    className="h-4 w-4 text-[var(--app-hint)]"
-                                    collapsed={machineCollapsed}
-                                />
-                                <ComputerIcon className="h-4.5 w-4.5 text-[var(--app-link)]" />
-                                <div className="flex items-center gap-2 min-w-0 flex-1">
-                                    {editingMachineId === machineGroup.machineId ? (
-                                        <MachineNameEditor
-                                            machineId={machineGroup.machineId}
-                                            currentName={machineGroup.machineName}
-                                            onSave={handleSaveMachineName}
-                                            onCancel={() => setEditingMachineId(null)}
-                                            isSaving={savingMachineId === machineGroup.machineId}
-                                        />
-                                    ) : (
-                                        <>
-                                            <span className="font-semibold text-lg break-words" title={machineGroup.machineId}>
-                                                {machineGroup.machineName}
-                                            </span>
-                                            <button
-                                                type="button"
-                                                onClick={(e) => {
-                                                    e.stopPropagation()
-                                                    if (renameDisabled) return
-                                                    setEditingMachineId(machineGroup.machineId)
-                                                }}
-                                                className="p-0.5 rounded hover:bg-[var(--app-subtle-bg)] text-[var(--app-hint)] hover:text-[var(--app-fg)] opacity-100 transition-opacity"
-                                                title={machineOnline ? t('machine.rename') : t('machine.renameOnlineOnly')}
-                                                disabled={renameDisabled}
-                                            >
-                                                <EditIcon />
-                                            </button>
-                                            <span className="shrink-0 text-xs text-[var(--app-hint)]">
-                                                ({machineGroup.directoryGroups.reduce((sum, g) => sum + g.sessions.length, 0)})
-                                            </span>
-                                        </>
-                                    )}
-                                </div>
-                            </button>
+                            <MachineGroupHeader
+                                machineGroup={machineGroup}
+                                machineCollapsed={machineCollapsed}
+                                machineOnline={machineOnline}
+                                menuDisabled={!api || !machineOnline}
+                                renameDisabled={renameDisabled}
+                                editingMachineId={editingMachineId}
+                                savingMachineId={savingMachineId}
+                                onToggleCollapse={() => toggleMachine(machineGroup.machineId, machineCollapsed)}
+                                onStartRename={() => setEditingMachineId(machineGroup.machineId)}
+                                onSaveMachineName={handleSaveMachineName}
+                                onCancelRename={() => setEditingMachineId(null)}
+                                onOpenMenu={(point) => openMachineMenu(machineGroup.machineId, point)}
+                            />
 
                             {/* 二级分类：目录 */}
                             {!machineCollapsed ? (
@@ -922,6 +1053,33 @@ export function SessionList(props: {
                 })}
             </div>
             </div>
+
+            <MachineActionMenu
+                isOpen={machineMenuOpen}
+                onClose={() => setMachineMenuOpen(false)}
+                onUpdateHapi={() => requestUpdate('hapi')}
+                onUpdateCodex={() => requestUpdate('codex')}
+                onUpdateClaude={() => requestUpdate('claude')}
+                anchorPoint={machineMenuAnchorPoint}
+            />
+
+            <ConfirmDialog
+                isOpen={updateDialog !== null}
+                onClose={() => setUpdateDialog(null)}
+                title={updateDialog
+                    ? t('machine.update.title', { tool: updateToolLabel(updateDialog.tool) })
+                    : ''}
+                description={updateDialog
+                    ? t('machine.update.description', {
+                        tool: updateToolLabel(updateDialog.tool),
+                        machine: getMachineDisplayName(updateDialog.machineId, machines, t)
+                    })
+                    : ''}
+                confirmLabel={t('machine.update.confirm')}
+                confirmingLabel={t('machine.update.confirming')}
+                onConfirm={runUpdate}
+                isPending={updatePending}
+            />
 
             <ConfirmDialog
                 isOpen={bulkDeleteOpen}

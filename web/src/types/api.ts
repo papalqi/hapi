@@ -73,6 +73,13 @@ export type MessagesResponse = {
 
 export type MachinesResponse = { machines: Machine[] }
 export type MachinePathsExistsResponse = { exists: Record<string, boolean> }
+export type MachineUpdateToolResponse = {
+    success: boolean
+    stdout?: string
+    stderr?: string
+    exitCode?: number
+    error?: string
+}
 
 export type SpawnResponse =
     | { type: 'success'; sessionId: string }

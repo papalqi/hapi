@@ -7,6 +7,7 @@ import type {
     FileSearchResponse,
     GitCommandResponse,
     MachinePathsExistsResponse,
+    MachineUpdateToolResponse,
     MachinesResponse,
     MessagesResponse,
     ModelMode,
@@ -368,6 +369,13 @@ export class ApiClient {
         await this.request(`/api/machines/${encodeURIComponent(machineId)}`, {
             method: 'PATCH',
             body: JSON.stringify({ displayName })
+        })
+    }
+
+    async updateMachineTool(machineId: string, tool: 'hapi' | 'codex' | 'claude'): Promise<MachineUpdateToolResponse> {
+        return await this.request<MachineUpdateToolResponse>(`/api/machines/${encodeURIComponent(machineId)}/update`, {
+            method: 'POST',
+            body: JSON.stringify({ tool })
         })
     }
 
