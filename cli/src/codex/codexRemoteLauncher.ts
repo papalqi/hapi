@@ -1034,16 +1034,45 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
             this.appServerInitialized = true;
         };
 
-        if (useAppServer) {
-            await ensureAppServerInitialized();
-        } else if (useSdk) {
-            await sdkClient.connect({
-                sdkOptions: buildCodexSdkOptions({
-                    mcpServers
-                })
-            });
-        } else if (mcpClient) {
-            await mcpClient.connect();
+        const initializeTransport = async (): Promise<void> => {
+            if (useAppServer) {
+                await ensureAppServerInitialized();
+                return;
+            }
+            if (useSdk) {
+                await sdkClient.connect({
+                    sdkOptions: buildCodexSdkOptions({
+                        mcpServers
+                    })
+                });
+                return;
+            }
+            if (mcpClient) {
+                await mcpClient.connect();
+            }
+        };
+
+        try {
+            await initializeTransport();
+        } catch (error) {
+            if (useSdk) {
+                const reason = error instanceof Error
+                    ? `${error.name}: ${error.message}`
+                    : String(error);
+                const warning = `Failed to initialize Codex SDK transport (${reason}). Falling back to app-server.`;
+                logger.warn('[Codex] SDK transport init failed; switching to app-server', error);
+                messageBuffer.addMessage(warning, 'status');
+                session.sendSessionEvent({ type: 'message', message: warning });
+
+                sdkClient.clearThread();
+                this.currentThreadId = null;
+                this.currentTurnId = null;
+
+                setTransport('app-server');
+                await ensureAppServerInitialized();
+            } else {
+                throw error;
+            }
         }
 
         while (!this.shouldExit) {
